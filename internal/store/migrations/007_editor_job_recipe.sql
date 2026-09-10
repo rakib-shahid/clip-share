@@ -1,0 +1,3 @@
+ALTER TABLE jobs ADD COLUMN trim_start_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN trim_end_ms INTEGER;
+ALTER TABLE jobs ADD COLUMN audio_recipe_json TEXT;

@@ -1,0 +1,16 @@
+root = "."
+tmp_dir = ".air-tmp"
+
+[build]
+cmd = "go build -o ./.air-tmp/clip-share ./cmd/server"
+bin = "./.air-tmp/clip-share"
+include_ext = ["go", "sql", "html"]
+exclude_dir = ["web", ".git", ".air-tmp", "data"]
+delay = 500
+stop_on_error = true
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true

@@ -1,0 +1,33 @@
+name: clip-share
+
+services:
+  clip-share:
+    image: rakibshahid/clip-share:latest
+    pull_policy: always
+    container_name: clip-share
+    # TrueNAS SCALE's built-in apps identity. The dataset ACL grants this
+    # account Modify access, allowing the non-root container to create /data
+    # subdirectories without weakening the dataset permissions.
+    user: "568:568"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "43138:8080"
+    environment:
+      CLIP_SHARE_ADDR: :8080
+      CLIP_SHARE_BASE_URL: https://clips.example.com
+      CLIP_SHARE_ALLOWED_ORIGIN: http://192.168.1.66:43138
+      CLIP_SHARE_DATA_DIR: /data
+      CLIP_SHARE_SECURE_COOKIES: "true"
+      CLIP_SHARE_SESSION_SECRET: ${CLIP_SHARE_SESSION_SECRET:?set CLIP_SHARE_SESSION_SECRET in Komodo}
+      CLIP_SHARE_SETUP_TOKEN: ${CLIP_SHARE_SETUP_TOKEN:?set CLIP_SHARE_SETUP_TOKEN in Komodo}
+    volumes:
+      - type: bind
+        source: "/mnt/Main pool/eeapps/clip-share/data"
+        target: /data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

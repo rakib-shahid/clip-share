@@ -1,0 +1,44 @@
+name: clip-share-dev
+
+services:
+  api:
+    build:
+      context: .
+      target: api-dev
+    environment:
+      CLIP_SHARE_ADDR: :8080
+      CLIP_SHARE_BASE_URL: http://localhost:5173
+      CLIP_SHARE_DATA_DIR: /data
+      CLIP_SHARE_SECURE_COOKIES: "false"
+      CLIP_SHARE_SESSION_SECRET: ${CLIP_SHARE_SESSION_SECRET:?set CLIP_SHARE_SESSION_SECRET in .env}
+      CLIP_SHARE_SETUP_TOKEN: ${CLIP_SHARE_SETUP_TOKEN:?set CLIP_SHARE_SETUP_TOKEN in .env}
+    volumes:
+      - .:/src
+      - go-cache:/go/pkg/mod
+      - dev-data:/data
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      target: web-dev
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./web:/src/web
+      - web-node-modules:/src/web/node_modules
+    ports:
+      - "5173:5173"
+
+volumes:
+  dev-data:
+  go-cache:
+  web-node-modules:

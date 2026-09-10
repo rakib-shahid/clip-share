@@ -1,0 +1,244 @@
+# Feature: Uploads, limits, and media processing
+
+## Status
+
+Accepted for version one. Exact command lines may be tuned by compatibility tests
+without changing the behavioral limits in this spec.
+
+The completed pre-finalization trim and multi-track-audio workflow is specified
+separately in [`../05-video-editing-and-audio.md`](../05-video-editing-and-audio.md).
+
+## Upload behavior
+
+- An authenticated user selects or drops a video, supplies a display title, and
+  selects a folder they own.
+- Version one uploads exactly one video per operation.
+- The initial display title is the original filename without its final extension.
+  It remains editable before submission and must be case-insensitively unique in
+  the selected destination folder.
+- A normal user's destination defaults to the currently open folder. A
+  super-admin upload always defaults to the personal admin root, even while
+  browsing another library, but the super-admin may explicitly choose any
+  accessible folder.
+- The UI shows upload byte progress, then a distinct processing state.
+- There is no per-user incoming-file quota. The Go server streams the request to
+  temporary storage; it does not hold the entire video in memory.
+- `ffprobe` validates that the file is supported media and records its actual
+  container, codecs, duration, dimensions, and streams.
+- FFmpeg creates browser/Discord-compatible output and a poster/thumbnail.
+- The poster frame is taken approximately 10% into the duration, capped at five
+  seconds from the start, to reduce blank/black opening-frame thumbnails. Custom
+  thumbnail selection is not part of version one.
+- A clip becomes shareable only when required assets and metadata are ready.
+- Failures produce an actionable state and clean up temporary/partial data.
+- Processing runs as persistent background jobs so uploads survive HTTP timeouts
+  and queued work can resume safely after a service restart.
+
+### Processing lifecycle
+
+```text
+uploading → queued → validating → processing → ready
+                    ↘ failed
+          any active state → cancelled
+```
+
+- A clip title is reserved in its destination folder when upload begins.
+- Completing transfer creates a durable SQLite job; closing the browser does not
+  cancel it.
+- The frontend polls job state about every two seconds. No WebSocket subsystem is
+  required.
+- FFmpeg progress is estimated from processed time versus probed duration and
+  remains visible across page refreshes.
+- Only ready clips have public pages/media. Every other state is publicly not found.
+- A job interrupted by service restart returns to queued after its claim expires
+  and restarts with clean partial output.
+- Jobs are claimed FIFO. No application-level concurrency cap is applied.
+- Failure categories are validation, size, insufficient storage, and processing.
+- On any failure, immediately delete the source and partial outputs and release
+  reservations. Retrying requires a new upload; failed source media is never held
+  for recovery.
+- A lightweight failed job record containing no media may remain privately only
+  to display the error. It remains until the user dismisses it; dismissing deletes
+  that record.
+- Cancelling an uploading/queued/processing item requires one confirmation,
+  requests process cancellation, deletes source/partials, and releases reservations.
+  It never enters trash because it never became a ready clip.
+- While request bytes or initial validation are in flight, the upload dialog's
+  confirmed Cancel action aborts the request and the server removes its temporary
+  source and reservation. Once a durable job exists, its card cancels through the
+  job endpoint. Repeating job cancellation is safe and retries media cleanup;
+  ready and failed jobs are not cancellation targets.
+- A failed notice has a styled dismissal confirmation. Dismissal deletes only the
+  media-free job and failed reserved clip records, so it creates no trash item.
+- Ready clips use the accepted 30/90-day trash lifecycle.
+- Each upload has a one-hour total timeout followed by immediate cleanup.
+- The one-hour clock starts when the server creates the uploading clip and disk
+  reservation. It covers request transfer, initial validation, queued time, and
+  FFmpeg processing; restarting the service does not reset it. Expiry terminates
+  active processing, removes source/partial/final media, and releases the
+  reservation. After a durable job exists it leaves only the ordinary dismissible
+  `upload_timeout` failure notice; expiry during the request phase leaves no record.
+- Graceful application shutdown is not a timeout: interrupted work remains
+  restartable unless its original wall-clock deadline has actually passed.
+
+## Stored-file limit
+
+Each user has a per-file stored-output limit, such as 50 MB. It is not an incoming
+upload quota: a larger source may arrive in temporary storage so FFmpeg can reduce
+it before the clip becomes part of the library.
+
+Changing a user's limit applies only to future user uploads. Existing ready clips
+are not deleted, recompressed, hidden, or otherwise modified.
+
+An installation still needs a technical request ceiling, temporary-disk capacity
+check, timeouts, and resource/error visibility to prevent or diagnose exhaustion
+of the home server. This safety ceiling is not a user-visible storage entitlement
+and can be much larger than stored-file limits.
+
+The accepted installation-wide source ceiling is 500 MB, using decimal units:
+500,000,000 bytes. User stored-file limits also use decimal MB. The server
+enforces the ceiling while streaming and removes rejected temporary data.
+
+The server reserves projected temporary capacity in SQLite before accepting an
+upload so concurrent requests cannot all claim the same disk space. A reservation
+is approximately twice the declared source size. Admission requires at least 5 GB
+of filesystem free space to remain after active reservations and the new projected
+work. Reject before transfer when `Content-Length` proves admission impossible,
+then continue checking actual bytes and capacity while streaming. Reservations
+are released on commit, rejection, cancellation, or retry-safe stale cleanup.
+
+### Compression control
+
+- The browser shows the selected source size and the user's stored-file limit.
+- If source size is greater than the limit, **Compress** is checked and locked;
+  the user cannot submit an over-limit stored result without processing.
+- Hovering/focusing its help icon explains: “This file is {source size}; your
+  stored-file limit is {limit}. Compression is required.”
+- If source size is at or below the limit, compression is optional and unchecked
+  by default to avoid needless quality loss. The user may check it voluntarily.
+- Optional compression exposes two understandable stepped sliders rather than raw
+  FFmpeg flags:
+  - **Quality:** labeled from Smaller file to Higher quality and mapped internally
+    to tested encoder settings.
+  - **Maximum resolution:** 480p, 720p, or 1080p.
+- Frame rate remains automatic up to 60 FPS and audio encoder details remain
+  hidden. The chosen resolution is a ceiling; input is never upscaled.
+- The five Quality positions map to H.264 CRF values:
+  - Smallest file: 30
+  - Smaller: 27
+  - Balanced: 24
+  - Higher quality: 21
+  - Highest quality: 18
+- The server independently enforces these rules. Browser-reported size and
+  checkbox state are conveniences, not trusted authority.
+- After processing, output exceeding the limit is not published as successful;
+  retry/failure behavior remains to be specified.
+
+## Target-size FFmpeg proposal
+
+Exact-size video encoding is an estimate. Given duration and an audio allowance,
+the service can calculate a video bitrate and use two-pass encoding to land near
+the target. It must reserve container overhead and a safety margin. Very long or
+complex video may look poor at the required bitrate; video already smaller than
+the target should normally be remuxed rather than enlarged/re-encoded.
+
+Proposed policy:
+
+- Remux when input codecs/container are compatible, the file is within its stored
+  limit, and voluntary compression was not requested.
+- Otherwise transcode to MP4 with H.264/AVC video and AAC-LC audio. This is the
+  compatibility-first web profile; newer codecs may compress more efficiently
+  but do not provide the same dependable browser/Discord playback target.
+- Use `video/mp4`, place MP4 metadata at the front of the file for progressive
+  playback, use broadly decodable 8-bit 4:2:0 pixel output, and preserve aspect
+  ratio.
+- Output uses H.264 High Profile, AAC-LC stereo at 128 kbps, `yuv420p`, a maximum
+  resolution of 1920×1080, and a maximum frame rate of 60 FPS. Smaller dimensions
+  and lower frame rates are never upscaled.
+- Use H.264 Level 4.2 and FFmpeg's `medium` encoding preset.
+- Reject media longer than 30 minutes.
+- For mandatory size compression, calculate bitrate to target exactly 100% of the
+  user's stored-file limit. Because encoded size is an estimate, accept any final
+  result at or below 110% of that limit. A result above 110% fails processing.
+- Perform one encode attempt. Do not automatically retry at a lower bitrate after
+  a size miss.
+- Reject or warn when calculated quality would fall below a chosen minimum.
+- Do not impose an application-level concurrency cap on FFmpeg jobs. Host resource
+  exhaustion and failed subprocesses must remain observable and cleanup retry-safe.
+- Delete the incoming original after the final processed MP4 and poster are
+  durably committed. Failed jobs retain only what the documented retry/cleanup
+  window requires.
+
+### Accepted sources
+
+- File-picker extensions: `.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`, `.avi`, and
+  `.wmv`; extension and browser MIME claims are never sufficient validation.
+- `ffprobe` must identify at least one supported, unencrypted video stream.
+- Source limits are 8K resolution, 240 FPS, 30 minutes, and 500 MB.
+- Use the default video stream, or the first valid video stream if no default is
+  marked. Preserve a valid primary audio stream when present; silent video is
+  valid. Ignore attachments such as cover art.
+- Reject corrupt, encrypted, or undecodable media and unsupported stream layouts.
+
+### Normalization and optional-compression fallback
+
+Every source is validated and normalized. Disabling compression means avoiding
+lossy re-encoding only when streams already satisfy the accepted MP4/H.264/AAC,
+resolution, frame-rate, pixel-format, and playback requirements.
+
+If voluntary compression produces a file larger than its source, discard that
+result. If the original streams are compatible, fast-start remux them into the
+final MP4. If they are incompatible, keep the normalized H.264/AAC result only if
+it satisfies the user's accepted 110% threshold; otherwise processing fails.
+
+## Completed acceptance criteria
+
+- [x] A source larger than the stored limit may upload to temporary storage but
+      cannot become a ready stored clip without meeting the limit.
+- [x] Sources larger than 500,000,000 bytes are rejected while streaming and leave
+      no clip or retained temporary data.
+- [x] A user cannot bypass their stored limit by changing browser request fields.
+- [x] Over-limit sources show mandatory checked compression with both source and
+      limit sizes in accessible help text.
+- [x] Within-limit sources show an optional, unchecked compression control.
+- [x] Upload accepts one video, defaults its editable title from the source
+      filename, and blocks a destination title conflict before submission.
+- [x] Destination defaults follow normal-user current-folder and super-admin
+      personal-root rules.
+- [x] Optional compression shows only Quality and Maximum resolution sliders with
+      accessible labels and discrete values.
+- [x] Mandatory compression targets the configured limit, accepts output at or
+      below 110%, and rejects larger output without an automatic encode retry.
+- [x] Upload and processing states are separately visible.
+- [x] Unsupported/corrupt media fails safely with useful feedback.
+- [x] Successful output plays in supported browsers and yields a thumbnail.
+- [x] The thumbnail comes from 10% of duration capped at five seconds; version one
+      offers no custom thumbnail picker.
+- [x] Output is at most 1080p60 and input is never upscaled.
+- [x] Media longer than 30 minutes is rejected.
+- [x] Sources over 8K or 240 FPS, encrypted/corrupt media, or files without a
+      supported real video stream are rejected regardless of extension.
+- [x] Every ready clip is an MP4 containing the accepted H.264/AAC compatibility
+      profile and fast-start metadata.
+- [x] Processing state and queued job data survive an application restart.
+- [x] The UI polls and shows durable processing state/progress without WebSockets.
+- [x] Failure immediately removes all source/partial media and releases capacity;
+      retry requires re-upload.
+- [x] A media-free failed notice remains privately visible until dismissed.
+- [x] Uploads exceeding one hour fail and clean up.
+- [x] Cancellation cleans non-ready media and does not create a trash item.
+- [x] Only ready clips are publicly reachable.
+- [x] A committed processed clip no longer retains its incoming original.
+- [x] Original title/path text never determines a physical storage path.
+- [x] Temporary and failed assets follow a documented cleanup policy.
+- [x] Disk admission accounts for SQLite-tracked active reservations, roughly two
+      source sizes of work, and a remaining 5 GB filesystem reserve.
+- [x] Quality slider steps map to CRF 30/27/24/21/18 and resolution steps map to
+      480p/720p/1080p.
+- [x] Optional compression never retains a larger result when compatible original
+      streams can be remuxed; incompatible streams still normalize safely.
+
+## Scope note
+
+Super-admin uploads bypass per-user stored-file limits but still obey all global
+source validation, 500 MB, 30-minute, 8K, and 240 FPS ceilings.

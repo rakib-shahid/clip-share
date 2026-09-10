@@ -1,0 +1,27 @@
+name: clip-share
+
+services:
+  app:
+    build:
+      context: .
+      target: production
+    image: ${CLIP_SHARE_IMAGE:-clip-share:local}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      CLIP_SHARE_ADDR: :8080
+      CLIP_SHARE_BASE_URL: ${CLIP_SHARE_BASE_URL:?set the public HTTPS URL}
+      CLIP_SHARE_DATA_DIR: /data
+      CLIP_SHARE_SECURE_COOKIES: "true"
+      CLIP_SHARE_SESSION_SECRET: ${CLIP_SHARE_SESSION_SECRET:?set CLIP_SHARE_SESSION_SECRET}
+      CLIP_SHARE_SETUP_TOKEN: ${CLIP_SHARE_SETUP_TOKEN:?set CLIP_SHARE_SETUP_TOKEN}
+    volumes:
+      - ${CLIP_SHARE_DATA_PATH:?set an absolute persistent host path}:/data
+    ports:
+      - "${CLIP_SHARE_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
