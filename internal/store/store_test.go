@@ -266,7 +266,7 @@ func TestFolderPageCountsDoNotDeadlockSingleConnection(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	page, err := db.FolderPage(ctx, admin.RootFolderID, 0)
+	page, err := db.FolderPage(ctx, admin.RootFolderID, FolderPageOptions{Sort: SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestFolderHierarchyAndCrossOwnerMove(t *testing.T) {
 	if _, err := db.CreateFolder(ctx, alice.RootFolderID, "GAMES", "games", nil); !errors.Is(err, ErrFolderNameTaken) {
 		t.Fatalf("duplicate folder error = %v", err)
 	}
-	page, err := db.FolderPage(ctx, child.ID, 0)
+	page, err := db.FolderPage(ctx, child.ID, FolderPageOptions{Sort: SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ func TestFolderHierarchyAndCrossOwnerMove(t *testing.T) {
 	if moved.OwnerUserID != admin.ID {
 		t.Fatalf("moved owner = %d, want %d", moved.OwnerUserID, admin.ID)
 	}
-	childPage, err := db.FolderPage(ctx, child.ID, 0)
+	childPage, err := db.FolderPage(ctx, child.ID, FolderPageOptions{Sort: SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}

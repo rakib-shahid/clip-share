@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/base64"
 	"errors"
 	"net/http"
 	"strconv"
@@ -28,21 +27,21 @@ func (a *API) getFolder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	offset := 0
-	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
-		var err error
-		decoded, decodeErr := base64.RawURLEncoding.DecodeString(cursor)
-		if decodeErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid_cursor", "The page cursor is invalid.", "cursor")
-			return
-		}
-		offset, err = strconv.Atoi(string(decoded))
-		if err != nil || offset < 0 {
-			writeError(w, http.StatusBadRequest, "invalid_cursor", "The page cursor is invalid.", "cursor")
-			return
-		}
+	sort, err := store.ParseFolderSort(r.URL.Query().Get("sort"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_sort", "The folder sort is invalid.", "sort")
+		return
 	}
-	page, err := a.store.FolderPage(r.Context(), id, offset)
+	var decodedCursor *store.FolderCursor
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		decoded, err := store.DecodeFolderCursor(cursor, id, sort)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_cursor", "The page cursor is invalid.", "cursor")
+			return
+		}
+		decodedCursor = &decoded
+	}
+	page, err := a.store.FolderPage(r.Context(), id, store.FolderPageOptions{Sort: sort, Cursor: decodedCursor})
 	if err != nil {
 		a.folderError(w, r, err)
 		return
@@ -50,10 +49,6 @@ func (a *API) getFolder(w http.ResponseWriter, r *http.Request) {
 	if !canAccessFolder(userFromContext(r.Context()), page.Folder) {
 		a.notFound(w, r)
 		return
-	}
-	if page.NextCursor != nil {
-		encoded := base64.RawURLEncoding.EncodeToString([]byte(*page.NextCursor))
-		page.NextCursor = &encoded
 	}
 	writeJSON(w, http.StatusOK, page)
 }
@@ -66,7 +61,7 @@ func (a *API) createFolder(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	parent, err := a.store.FolderPage(r.Context(), input.ParentFolderID, 0)
+	parent, err := a.store.FolderPage(r.Context(), input.ParentFolderID, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		a.folderError(w, r, err)
 		return
@@ -98,7 +93,7 @@ func (a *API) renameFolder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page, err := a.store.FolderPage(r.Context(), id, 0)
+	page, err := a.store.FolderPage(r.Context(), id, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		a.folderError(w, r, err)
 		return
@@ -135,7 +130,7 @@ func (a *API) moveFolder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	source, err := a.store.FolderPage(r.Context(), id, 0)
+	source, err := a.store.FolderPage(r.Context(), id, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		a.folderError(w, r, err)
 		return
@@ -149,7 +144,7 @@ func (a *API) moveFolder(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &input) {
 		return
 	}
-	destination, err := a.store.FolderPage(r.Context(), input.DestinationFolderID, 0)
+	destination, err := a.store.FolderPage(r.Context(), input.DestinationFolderID, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		a.folderError(w, r, err)
 		return

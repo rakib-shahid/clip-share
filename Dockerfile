@@ -1,7 +1,7 @@
 FROM node:24-alpine AS web-deps
 WORKDIR /src/web
 COPY web/package*.json ./
-RUN npm ci
+RUN npm ci && sha256sum package-lock.json | cut -d ' ' -f 1 > node_modules/.clip-share-package-lock.sha256
 
 FROM web-deps AS web-build
 COPY web/ ./
@@ -22,7 +22,7 @@ CMD ["air", "-c", ".air.toml"]
 
 FROM web-deps AS web-dev
 COPY web/ ./
-CMD ["npm", "run", "dev"]
+CMD ["sh", "/src/web/docker-entrypoint.sh"]
 
 FROM alpine:3.22 AS production
 RUN apk add --no-cache ca-certificates ffmpeg wget && addgroup -S clipshare && adduser -S -G clipshare clipshare && mkdir -p /data && chown clipshare:clipshare /data

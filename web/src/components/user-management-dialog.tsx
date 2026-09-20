@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react"
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { Archive, ArrowLeft, ExternalLink, KeyRound, Pencil, Power, RefreshCw, RotateCcw, ShieldCheck, Trash2, UserRound } from "lucide-react"
 import { request, type Session, type User, type UserStorageSummary } from "@/api"
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Input } from "@/components/ui/input"
-import { Modal } from "@/components/ui/modal"
 
 type Action = { type: "edit" | "password" | "disable" | "enable" | "archive" | "restore" | "delete-library"; user: User }
 
@@ -15,9 +16,11 @@ type Props = {
 }
 
 export function UserManagementDialog({ session, onClose, onUserChanged, onOpenLibrary }: Props) {
+  const [open, setOpen] = useState(true)
   const [action, setAction] = useState<Action | null>(null)
   const [users, setUsers] = useState<UserStorageSummary[] | null>(null)
   const [error, setError] = useState("")
+  const returnFocusRef = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
   const load = useCallback(async () => {
     setUsers(null)
     setError("")
@@ -33,9 +36,13 @@ export function UserManagementDialog({ session, onClose, onUserChanged, onOpenLi
   const archived = users?.filter((user) => user.state === "archived") ?? []
 
   return <>
-    <Modal title="Manage users" onClose={onClose} className="max-h-[90vh] max-w-5xl">
-      <div className="max-h-[72vh] overflow-y-auto pr-1">
-        <p className="mb-5 text-sm leading-6 text-slate-400">Change login settings and account access. Public clip links and libraries remain intact when an account is disabled or archived.</p>
+    <Dialog open={open} onOpenChange={setOpen}>
+    <DialogContent className="max-h-[90dvh] max-w-5xl overflow-hidden" onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); onClose() }}>
+      <DialogHeader>
+        <DialogTitle>Manage users</DialogTitle>
+        <DialogDescription>Change login settings and account access. Public clip links and libraries remain intact when an account is disabled or archived.</DialogDescription>
+      </DialogHeader>
+      <div className="min-h-0 overflow-y-auto pr-1">
         {!users && !error && <p className="py-10 text-center text-sm text-slate-500" role="status">Loading user storage…</p>}
         {error && <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-4"><p className="text-sm text-red-200" role="alert">{error}</p><Button className="mt-3" size="sm" variant="secondary" onClick={() => void load()}><RefreshCw size={14} /> Retry</Button></div>}
         {users && <><UserList users={active} onAction={(type, user) => setAction({ type, user })} onOpenLibrary={onOpenLibrary} />
@@ -45,7 +52,8 @@ export function UserManagementDialog({ session, onClose, onUserChanged, onOpenLi
           <UserList users={archived} onAction={(type, user) => setAction({ type, user })} onOpenLibrary={onOpenLibrary} />
         </section>}</>}
       </div>
-    </Modal>
+    </DialogContent>
+    </Dialog>
     {action && <UserActionDialog action={action} session={session} onClose={() => setAction(null)} onChanged={(user) => { onUserChanged(user); setAction(null); void load() }} />}
   </>
 }
@@ -123,7 +131,8 @@ function UserActionDialog({ action, session, onClose, onChanged }: { action: Act
     }
   }
 
-  return <Modal title={title} onClose={onClose} nested dismissible={!busy}>
+  const destructive = action.type === "disable" || action.type === "archive" || action.type === "delete-library"
+  return <UserActionShell title={title} destructive={destructive} busy={busy} onClose={onClose}>
     <form className="space-y-4" onSubmit={submit}>
       {action.type === "edit" && <><UserField label="Username"><Input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={32} required autoFocus /></UserField><UserField label="Stored limit (MB)"><Input type="number" value={limit} onChange={(event) => setLimit(Number(event.target.value))} min={1} max={500} required /></UserField></>}
       {(action.type === "password" || action.type === "restore") && <><p className="text-sm leading-6 text-slate-400">{action.type === "restore" ? "Set a new password before restoring login access." : "The old password will stop working. Existing browser sessions are not signed out."}</p><UserField label="New password"><Input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} maxLength={128} required autoFocus /></UserField></>}
@@ -133,7 +142,12 @@ function UserActionDialog({ action, session, onClose, onChanged }: { action: Act
       {error && <p className="rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200" role="alert">{error}</p>}
       <div className="flex justify-end gap-2 pt-2"><Button type="button" variant="secondary" disabled={busy} onClick={onClose}><ArrowLeft size={15} /> Back</Button><Button variant={action.type === "archive" ? "warning" : action.type === "delete-library" || action.type === "disable" ? "danger" : action.type === "restore" || action.type === "enable" || action.type === "edit" || action.type === "password" ? "success" : "default"} disabled={busy || ((action.type === "archive" || action.type === "delete-library") && !acknowledged)}>{action.type === "edit" ? <Pencil size={15} /> : action.type === "password" ? <KeyRound size={15} /> : action.type === "archive" ? <Archive size={15} /> : action.type === "delete-library" ? <Trash2 size={15} /> : action.type === "restore" ? <RotateCcw size={15} /> : <Power size={15} />}{busy ? "Saving…" : action.type === "edit" ? "Save changes" : action.type === "password" ? "Set password" : action.type === "archive" ? "Archive user" : action.type === "delete-library" ? "Move library to recycle bin" : action.type === "restore" ? "Restore user" : action.type === "enable" ? "Enable user" : "Disable user"}</Button></div>
     </form>
-  </Modal>
+  </UserActionShell>
+}
+
+function UserActionShell({ title, destructive, busy, onClose, children }: { title: string; destructive: boolean; busy: boolean; onClose: () => void; children: ReactNode }) {
+  if (destructive) return <AlertDialog open onOpenChange={(open) => { if (!open && !busy) onClose() }}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{title}</AlertDialogTitle><AlertDialogDescription>Review the consequences before confirming this account action.</AlertDialogDescription></AlertDialogHeader>{children}</AlertDialogContent></AlertDialog>
+  return <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose() }}><DialogContent showCloseButton={!busy} onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}><DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>Update this user account.</DialogDescription></DialogHeader>{children}</DialogContent></Dialog>
 }
 
 function mutation(session: Session, body: object, method = "POST"): RequestInit {

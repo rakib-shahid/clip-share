@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Check, Copy, Folder, FolderOpen, Search, Video } from "lucide-react";
 import { request, type SearchResult, type Session } from "@/api";
 import {
@@ -6,9 +6,24 @@ import {
   VideoPreviewDialog,
 } from "@/components/clip-preview";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { copyText } from "@/lib/clipboard";
+import { createPreferenceStore } from "@/lib/explorer-preferences";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Grid2X2, List } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 
 type Props = {
   session: Session;
@@ -17,6 +32,7 @@ type Props = {
 };
 
 export function SearchDialog({ session, onClose, onNavigate }: Props) {
+  const [open, setOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [truncated, setTruncated] = useState(false);
@@ -25,6 +41,12 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<SearchResult | null>(null);
   const [copiedID, setCopiedID] = useState<number | null>(null);
+  const preferenceStore = useMemo(() => createPreferenceStore(session.user.id), [session.user.id]);
+  const [view, setView] = useState(preferenceStore.get().search.view);
+  useEffect(() => { const unsubscribe = preferenceStore.subscribe((next) => setView(next.search.view)); return () => { unsubscribe(); preferenceStore.destroy() } }, [preferenceStore]);
+  const returnFocusRef = useRef(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
 
   async function search(event: FormEvent) {
     event.preventDefault();
@@ -59,23 +81,41 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
 
   async function copyLink(result: SearchResult) {
     if (!result.publicId) return;
-    await copyText(`${session.publicBaseURL}/c/${result.publicId}`);
-    setCopiedID(result.id);
-    window.setTimeout(
-      () => setCopiedID((current) => (current === result.id ? null : current)),
-      1500,
-    );
+    try {
+      await copyText(`${session.publicBaseURL}/c/${result.publicId}`);
+      setCopiedID(result.id);
+      toast.success("Link copied");
+      window.setTimeout(
+        () => setCopiedID((current) => (current === result.id ? null : current)),
+        1500,
+      );
+    } catch {
+      toast.error("Could not copy link");
+    }
   }
 
   return (
     <>
-      <Modal
-        title="Search libraries"
-        onClose={onClose}
-        className="max-h-[90vh] max-w-5xl"
+      <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent
+        className="max-h-[90dvh] max-w-5xl overflow-hidden"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          returnFocusRef.current?.focus();
+          onClose();
+        }}
       >
-        <form className="flex gap-2" onSubmit={search} role="search">
+        <DialogHeader>
+          <DialogTitle>Search libraries</DialogTitle>
+          <DialogDescription>
+            Searches every folder you can access. Recycle-bin items are excluded.
+          </DialogDescription>
+        </DialogHeader>
+        <form className="flex items-end gap-2" onSubmit={search} role="search">
+          <Field className="min-w-0 flex-1 gap-1.5">
+          <FieldLabel htmlFor="library-search">Folder or clip name</FieldLabel>
           <Input
+            id="library-search"
             aria-label="Search folder names and clip titles"
             placeholder="Search folder names and clip titles…"
             value={query}
@@ -83,13 +123,12 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
             maxLength={200}
             autoFocus
           />
+          </Field>
           <Button disabled={loading}>
             <Search size={17} /> {loading ? "Searching…" : "Search"}
           </Button>
         </form>
-        <p className="mt-2 text-xs text-slate-500">
-          Searches every folder you can access. Recycle-bin items are excluded.
-        </p>
+        <div className="mt-3 flex justify-end"><ToggleGroup type="single" value={view} onValueChange={(value) => { if (value === "grid" || value === "list") preferenceStore.update({ search: { view: value } }) }} aria-label="Search result view"><ToggleGroupItem value="grid" aria-label="Grid view"><Grid2X2 /></ToggleGroupItem><ToggleGroupItem value="list" aria-label="List view"><List /></ToggleGroupItem></ToggleGroup></div>
         {error && (
           <p
             className="mt-4 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200"
@@ -98,7 +137,8 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
             {error}
           </p>
         )}
-        <div className="mt-5 max-h-[62vh] overflow-y-auto pr-1">
+        <div className="min-h-0 overflow-y-auto pr-1">
+          {loading && <div className={view === "grid" ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3" : "grid gap-2"} role="status" aria-label="Searching"><Skeleton className="h-28" /><Skeleton className="h-28" /><Skeleton className="h-28" /></div>}
           {!searched && !loading && (
             <SearchEmpty
               icon={<Search size={28} />}
@@ -114,12 +154,13 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
             />
           )}
           {results.length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className={view === "grid" ? "grid gap-3 sm:grid-cols-2 lg:grid-cols-3" : "grid gap-2"} data-view={view} aria-label="Search results">
               {results.map((result) => (
-                <article
+                <li
                   key={`${result.kind}-${result.id}`}
-                  className="overflow-hidden rounded-xl border border-white/[.08] bg-slate-950"
+                  className="min-w-0"
                 >
+                  <Item variant="outline" className="h-full flex-col items-stretch overflow-hidden rounded-xl bg-slate-950 p-0">
                   {result.kind === "clip" &&
                   result.state === "ready" &&
                   result.publicId ? (
@@ -137,26 +178,17 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
                       )}
                     </div>
                   )}
-                  <div className="p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-300">
-                      {result.kind}
-                    </p>
-                    <h3 className="mt-1 truncate font-medium text-white">
-                      {result.name}
-                    </h3>
-                    <p
-                      className="mt-1 truncate text-xs text-slate-500"
-                      title={result.path}
-                    >
-                      {result.path}
-                    </p>
+                  <ItemContent className="w-full p-3">
+                    <Badge variant="secondary">{result.kind}</Badge>
+                    <ItemTitle><span className="truncate">{result.name}</span></ItemTitle>
+                    <ItemDescription title={result.path}>{result.path}</ItemDescription>
                     {session.user.role === "admin" && (
                       <p className="mt-1 text-xs text-slate-600">
                         Owner: {result.ownerUsername}
                       </p>
                     )}
-                  </div>
-                  <div className="flex flex-wrap gap-1 border-t border-white/[.06] bg-slate-950 px-2 py-2">
+                  </ItemContent>
+                  <ItemActions className="flex w-full flex-wrap gap-1 border-t border-white/[.06] bg-slate-950 px-2 py-2">
                     <Button
                       size="sm"
                       variant="secondary"
@@ -183,10 +215,11 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
                           {copiedID === result.id ? "Copied" : "Copy link"}
                         </Button>
                       )}
-                  </div>
-                </article>
+                  </ItemActions>
+                  </Item>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
           {truncated && (
             <p className="mt-4 rounded-lg border border-sky-400/15 bg-sky-400/[.06] px-3 py-2 text-sm text-sky-100">
@@ -195,7 +228,8 @@ export function SearchDialog({ session, onClose, onNavigate }: Props) {
             </p>
           )}
         </div>
-      </Modal>
+      </DialogContent>
+      </Dialog>
       {preview?.publicId && (
         <VideoPreviewDialog
           title={preview.name}
@@ -219,12 +253,6 @@ function SearchEmpty({
   detail: string;
 }) {
   return (
-    <div className="grid min-h-52 place-items-center rounded-xl border border-dashed border-white/10 bg-white/[.02] text-center">
-      <div>
-        <div className="mx-auto text-slate-700">{icon}</div>
-        <h3 className="mt-3 font-medium text-slate-300">{title}</h3>
-        <p className="mt-1 text-sm text-slate-600">{detail}</p>
-      </div>
-    </div>
+    <Empty className="min-h-52 border border-white/10 bg-white/[.02]"><EmptyHeader><EmptyMedia>{icon}</EmptyMedia><EmptyTitle>{title}</EmptyTitle><EmptyDescription>{detail}</EmptyDescription></EmptyHeader></Empty>
   );
 }

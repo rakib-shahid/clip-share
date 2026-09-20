@@ -1,6 +1,112 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
-:root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #080b12; color: #e2e8f0; font-synthesis: none; text-rendering: optimizeLegibility; }
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+.explorer-list-head {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(8rem, .8fr) minmax(8rem, .8fr) minmax(9rem, .8fr) 3rem;
+  gap: 1rem;
+  padding: 0 .75rem .5rem;
+  color: rgb(100 116 139);
+  font-size: .7rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.clip-card {
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 1rem;
+}
+
+[data-view="list"] > li { min-width: 0; }
+[data-view="list"] [data-slot="item"] {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(8rem, .8fr) minmax(8rem, .8fr) minmax(9rem, .8fr) 3rem;
+  min-height: 4.75rem;
+  align-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  padding: .5rem .75rem;
+}
+[data-view="list"] [data-slot="item-primary"] { display: flex; min-width: 0; min-height: 3.5rem; align-items: center; gap: .75rem; padding: 0; border-radius: .75rem; }
+[data-view="list"] [data-slot="item-primary-details"] { min-width: 0; padding: 0; }
+[data-view="list"] [data-slot="grid-secondary"],
+[data-view="list"] [data-slot="grid-details"] { display: none; }
+[data-view="list"] .explorer-list-cell { display: block; min-width: 0; }
+[data-view="list"] [data-slot="clip-media"] { width: 7.5rem; min-width: 7.5rem; border-radius: .75rem; }
+[data-view="list"] [data-slot="item-actions"] { width: auto; justify-self: end; padding: 0; }
+
+@media (max-width: 639px) {
+  .explorer-list-head { display: none; }
+  [data-view="list"] [data-slot="item"] { grid-template-columns: minmax(0, 1fr) 3rem; gap: .5rem; padding: .625rem; }
+  [data-view="list"] [data-slot="clip-media"] { width: 4.5rem; min-width: 4.5rem; }
+  [data-view="list"] .explorer-list-cell { display: none; }
+  [data-view="list"] [data-slot="mobile-secondary"] { display: -webkit-box; }
+  [data-view="list"] [data-slot="item-description"] { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #080b12;
+  color: #e2e8f0;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --radius: 0.75rem;
+  --background: #080b12;
+  --foreground: #e2e8f0;
+  --card: #0f172a;
+  --card-foreground: #e2e8f0;
+  --popover: #020617;
+  --popover-foreground: #e2e8f0;
+  --primary: #38bdf8;
+  --primary-foreground: #082f49;
+  --secondary: #1e293b;
+  --secondary-foreground: #e2e8f0;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #0c4a6e;
+  --accent-foreground: #e0f2fe;
+  --destructive: #881337;
+  --destructive-foreground: #fff1f2;
+  --success: #064e3b;
+  --success-foreground: #d1fae5;
+  --warning: #78350f;
+  --warning-foreground: #fef3c7;
+  --border: #334155;
+  --input: #334155;
+  --ring: #7dd3fc;
+}
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 50% -20%, rgba(56, 189, 248, .08), transparent 38%), #080b12; }
 button, input { font: inherit; }
@@ -8,9 +114,18 @@ button, a, [role="button"] { cursor: pointer; }
 .eyebrow { color: #7dd3fc; font-size: .72rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 .ambient { position: absolute; inset: -25%; pointer-events: none; background: radial-gradient(circle at center, rgba(14, 165, 233, .11), transparent 36%); filter: blur(30px); }
 .bg-slate-950\/60 { background-color: rgb(2 6 23) !important; }
-.group.flex.h-full > div.mt-3 { margin-top: auto; margin-left: -1rem; margin-right: -1rem; margin-bottom: -1rem; padding: .5rem; background: #020617; }
 .flex.h-full > .overflow-hidden { flex: 1 1 auto; }
-.grid > .flex.h-full, .grid > .group.flex.h-full { height: 100%; align-self: stretch; }
-.flex.h-full > .overflow-hidden { border-radius: .75rem .75rem 0 0; }
-.flex.h-full > .overflow-hidden + div { margin-bottom: 0 !important; padding-top: .5rem; padding-bottom: .5rem; border-radius: 0 0 .75rem .75rem; }
+.grid > .flex.h-full { height: 100%; align-self: stretch; }
+
+@keyframes dialog-rise-in {
+  0% { opacity: 0; transform: translate(-50%, calc(-50% + 1rem)) scale(.985); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@keyframes dialog-settle-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, calc(-50% + 1.25rem)) scale(.98); }
+}
+.dialog-motion { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.dialog-motion[data-state="open"] { animation: dialog-rise-in 180ms cubic-bezier(.22, 1, .36, 1); }
+.dialog-motion[data-state="closed"] { animation: dialog-settle-out 160ms cubic-bezier(.4, 0, 1, 1); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }

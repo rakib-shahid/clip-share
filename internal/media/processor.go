@@ -79,14 +79,17 @@ func uploadTimedOut(ctx context.Context) bool {
 }
 
 func (p *Processor) process(ctx context.Context, job store.ProcessingJob) {
+	temporaryDir := filepath.Join(p.dataDir, "temporary", job.StorageID)
 	select {
 	case ffmpegGate <- struct{}{}:
 		defer func() { <-ffmpegGate }()
 	case <-ctx.Done():
+		if uploadTimedOut(ctx) {
+			p.fail(ctx, job, temporaryDir, "", "upload_timeout", "This upload exceeded the one-hour total limit.", context.Cause(ctx))
+		}
 		return
 	}
 	p.logger.Info("job_started", "jobId", job.ID, "clipId", job.ClipID)
-	temporaryDir := filepath.Join(p.dataDir, "temporary", job.StorageID)
 	sourcePath := filepath.Join(temporaryDir, "source")
 	outputDir := filepath.Join(temporaryDir, "output")
 	entry, err := p.store.MediaLayoutEntry(ctx, job.ClipID)

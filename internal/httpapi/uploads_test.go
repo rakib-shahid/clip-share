@@ -64,7 +64,7 @@ func TestUploadIntakeCreatesPrivateEditorSession(t *testing.T) {
 		t.Fatalf("session = %+v", response)
 	}
 
-	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, 0)
+	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestUploadFailureCleansTemporaryState(t *testing.T) {
 	if upload.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s", upload.Code, upload.Body.String())
 	}
-	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, 0)
+	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestCancelledUploadRequestCleansTemporaryState(t *testing.T) {
 		t.Fatal("cancelled upload handler did not return")
 	}
 	<-writerDone
-	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, 0)
+	page, err := database.FolderPage(context.Background(), session.User.RootFolderID, store.FolderPageOptions{Sort: store.SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -77,6 +77,7 @@ func newHandler(cfg config.Config, data *store.Store, logger *slog.Logger, web h
 	mux.Handle("POST /api/uploads/{uploadID}/preview", api.requireUser(http.HandlerFunc(api.renderEditorPreview)))
 	mux.Handle("GET /api/uploads/{uploadID}/preview", api.requireUser(http.HandlerFunc(api.getEditorPreview)))
 	mux.Handle("DELETE /api/uploads/{uploadID}", api.requireUser(http.HandlerFunc(api.discardEditorSession)))
+	mux.Handle("GET /api/jobs/statuses", api.requireUser(http.HandlerFunc(api.getJobStatuses)))
 	mux.Handle("GET /api/jobs/{jobID}", api.requireUser(http.HandlerFunc(api.getJob)))
 	mux.Handle("DELETE /api/jobs/{jobID}", api.requireUser(http.HandlerFunc(api.cancelJob)))
 	mux.Handle("DELETE /api/jobs/{jobID}/failure", api.requireUser(http.HandlerFunc(api.dismissFailedJob)))

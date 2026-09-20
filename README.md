@@ -26,11 +26,12 @@ verification commands, current scope, and a guided tour of the Go code.
 ## Start here
 
 - [Project brief](specs/README.md)
-- [Architecture](specs/completed/general/architecture.md)
-- [Frontend framework decision](specs/completed/general/frontend-framework.md)
-- [Docker development and deployment](specs/completed/general/docker.md)
-- [Accepted version-one feature scope](specs/completed/general/features.md)
-- [Spec-driven workflow](specs/completed/general/workflow.md)
+- [Core platform main spec](specs/completed/0-core-platform/main.md)
+- [Architecture](specs/completed/0-core-platform/slices/0.2-architecture.md)
+- [Frontend framework decision](specs/completed/0-core-platform/slices/0.5-frontend-framework.md)
+- [Docker development and deployment](specs/completed/0-core-platform/slices/0.6-docker.md)
+- [Editor GUI main spec](specs/completed/1-editor-gui/main.md)
+- [File explorer UI](specs/completed/2-file-explorer-ui/main.md)
 - [Development and deployment guide](docs/development.md)
 
 ## Current direction
@@ -43,4 +44,6 @@ verification commands, current scope, and a guided tour of the Go code.
 - Important behavior is specified and accepted before it is implemented.
 
 The accepted frontend is React, Vite, TypeScript, Tailwind CSS, and shadcn/ui.
-Implementation proceeds from the accepted specs in small vertical slices.
+Every overarching feature has a permanent numbered main spec. Implementation
+proceeds through its decimal child specs, each scoped to the smallest independently
+testable unit. See the [specification map and authoring rule](specs/README.md).

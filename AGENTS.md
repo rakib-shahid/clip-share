@@ -6,9 +6,11 @@ the application. This project uses spec-driven development.
 For a new feature:
 
 1. Discuss goals, non-goals, user flows, edge cases, and acceptance criteria.
-2. Add or update a spec in `specs/` and mark unresolved choices clearly.
+2. Add or update its hard-numbered `main.md`, then decompose accepted work into
+   decimal child specs as required by `specs/README.md`.
 3. Obtain user agreement on material choices before scaffolding or coding them.
-4. Implement the smallest accepted slice.
+4. Implement the smallest accepted child slice; it may be only one function or
+   one state path when that is the narrowest independently testable unit.
 5. Add proportionate automated tests and verify it through Docker Compose.
 6. Update the spec when implementation reveals an intentional design change.
 

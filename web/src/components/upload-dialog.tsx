@@ -4,19 +4,24 @@ import { request, uploadVideo, type Folder as FolderRecord, type FolderPage, typ
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FolderPickerDialog } from "@/components/folder-picker-dialog"
-import { Modal } from "@/components/ui/modal"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Attachment, AttachmentAction, AttachmentActions, AttachmentContent, AttachmentDescription, AttachmentMedia, AttachmentTitle } from "@/components/ui/attachment"
+import { Progress } from "@/components/ui/progress"
+import { Spinner } from "@/components/ui/spinner"
+import { ViewportFileDrop } from "@/components/viewport-file-drop"
 
 const qualityValues = [30, 27, 24, 21, 18]
 const qualityLabels = ["Smallest file", "Smaller", "Balanced", "Higher quality", "Highest quality"]
 const resolutionValues = [480, 720, 1080]
 
-export function UploadDialog({ session, currentFolder, users, onClose, onQueued, onUploaded }: { session: Session; currentFolder: FolderRecord; users: User[]; onClose: () => void; onQueued: () => void; onUploaded: (sessionID: string, file: File) => void }) {
+export function UploadDialog({ session, currentFolder, users, initialFile = null, onClose, onQueued, onUploaded }: { session: Session; currentFolder: FolderRecord; users: User[]; initialFile?: File | null; onClose: () => void; onQueued: () => void; onUploaded: (sessionID: string, file: File) => void }) {
   const defaultDestination = currentFolder.id
   const [destination, setDestination] = useState<FolderRecord | null>(null)
   const [pickingDestination, setPickingDestination] = useState(false)
-  const [file, setFile] = useState<File | null>(null)
-  const [title, setTitle] = useState("")
-  const [compress, setCompress] = useState(false)
+  const [file, setFile] = useState<File | null>(initialFile)
+  const [title, setTitle] = useState(() => initialFile ? titleFromFile(initialFile) : "")
+  const [compress, setCompress] = useState(() => Boolean(initialFile && session.user.role !== "admin" && initialFile.size > session.user.storedFileLimitBytes))
   const [quality, setQuality] = useState(2)
   const [resolution, setResolution] = useState(2)
   const [phase, setPhase] = useState<"idle" | "uploading" | "validating">("idle")
@@ -35,8 +40,7 @@ export function UploadDialog({ session, currentFolder, users, onClose, onQueued,
   function chooseFile(selected?: File) {
     if (!selected) return
     setFile(selected); setError("")
-    const lastDot = selected.name.lastIndexOf(".")
-    setTitle(lastDot > 0 ? selected.name.slice(0, lastDot) : selected.name)
+    setTitle(titleFromFile(selected))
     setCompress(session.user.role !== "admin" && selected.size > session.user.storedFileLimitBytes)
   }
   function drop(event: DragEvent) { event.preventDefault(); chooseFile(event.dataTransfer.files[0]) }
@@ -84,13 +88,11 @@ export function UploadDialog({ session, currentFolder, users, onClose, onQueued,
 
   const busy = phase !== "idle"
   function requestClose() { if (busy) setCancelConfirming(true); else onClose() }
-  if(openingEditor&&file)return <Modal title="Edit clip" onClose={requestClose} dismissible={!cancelConfirming} className="max-h-[94vh] max-w-6xl"><div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"><section><p className="eyebrow">Uploading and analyzing privately</p><h2 className="mt-1 truncate text-xl font-semibold text-white">{title}</h2><div className="mt-5 overflow-hidden rounded-xl border border-white/[.08] bg-slate-950">{localPreviewURL?<video className="aspect-video w-full" src={localPreviewURL} controls preload="metadata" />:<div className="grid aspect-video place-items-center text-sm text-slate-500">Preparing local preview…</div>}</div><div className="mt-4" role="status"><div className="mb-2 flex justify-between text-sm"><span className="text-slate-300">{phase==="uploading"?"Uploading source…":"Analyzing tracks and preparing editor…"}</span><span className="text-slate-500">{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-sky-400 transition-[width]" style={{width:`${progress}%`}} /></div></div></section><aside className="rounded-xl border border-white/[.08] bg-white/[.025] p-4"><h3 className="font-medium text-white">Editor controls</h3><p className="mt-2 text-sm leading-6 text-slate-400">You can inspect the local video now. The trim filmstrip and detected audio tracks will appear as soon as server analysis finishes.</p></aside></div>{error&&<p className="mt-4 text-sm text-red-300" role="alert">{error}</p>}{cancelConfirming&&<Modal nested title="Cancel this upload?" onClose={()=>setCancelConfirming(false)}><p className="text-sm text-slate-400">The transfer and all temporary data will be discarded.</p><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={()=>setCancelConfirming(false)}><ArrowLeft size={15} /> Keep editing</Button><Button variant="danger" onClick={()=>{setCancelConfirming(false);abortRef.current?.abort()}}><X size={15} /> Cancel upload</Button></div></Modal>}</Modal>
-  return <Modal title="Upload a video" onClose={requestClose} className="max-h-[90vh] max-w-2xl">
+  if(openingEditor&&file)return <Dialog open onOpenChange={(open) => { if (!open && !cancelConfirming) requestClose() }}><DialogContent className="max-h-[94vh] max-w-6xl"><DialogHeader><DialogTitle>Edit clip</DialogTitle><DialogDescription>Uploading and analyzing privately.</DialogDescription></DialogHeader><div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"><section><h2 className="truncate text-xl font-semibold text-white">{title}</h2><div className="mt-5 overflow-hidden rounded-xl border border-white/[.08] bg-slate-950">{localPreviewURL?<video className="aspect-video w-full" src={localPreviewURL} controls preload="metadata" />:<div className="grid aspect-video place-items-center text-sm text-slate-500">Preparing local preview…</div>}</div><UploadProgress phase={phase} progress={progress} /></section><aside className="rounded-xl border border-white/[.08] bg-white/[.025] p-4"><h3 className="font-medium text-white">Editor controls</h3><p className="mt-2 text-sm leading-6 text-slate-400">You can inspect the local video now. The trim filmstrip and detected audio tracks will appear as soon as server analysis finishes.</p></aside></div>{error&&<p className="mt-4 text-sm text-red-300" role="alert">{error}</p>}{cancelConfirming&&<UploadCancelAlert detail="The transfer and all temporary data will be discarded." keepLabel="Keep editing" onKeep={() => setCancelConfirming(false)} onCancel={() => { setCancelConfirming(false); abortRef.current?.abort() }} />}</DialogContent></Dialog>
+  return <><ViewportFileDrop enabled={!busy && !pickingDestination && !cancelConfirming} destinationLabel={destination ? destination.isRoot ? `${destination.ownerUsername}'s library` : destination.name : currentFolder.isRoot ? `${currentFolder.ownerUsername}'s library` : currentFolder.name} onFile={chooseFile} /><Dialog open onOpenChange={(open) => { if (!open) requestClose() }}><DialogContent className="max-h-[90vh] max-w-2xl"><DialogHeader><DialogTitle>Upload a video</DialogTitle><DialogDescription>Select a private source video and choose how it should be added.</DialogDescription></DialogHeader>
       <p className="eyebrow mb-5">New clip</p><form className="max-h-[70vh] space-y-5 overflow-y-auto pr-1" onSubmit={submit}>
         <input ref={inputRef} className="sr-only" type="file" accept=".mp4,.m4v,.mov,.mkv,.webm,.avi,.wmv" onChange={(event) => chooseFile(event.target.files?.[0])} />
-        <button type="button" className="grid min-h-36 w-full place-items-center rounded-xl border border-dashed border-white/15 bg-slate-950/50 p-5 text-center transition hover:border-sky-400/40 hover:bg-sky-400/[.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400" onClick={() => inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={drop} disabled={busy}>
-          {file ? <div><FileVideo className="mx-auto text-sky-300" size={30} /><p className="mt-3 max-w-md truncate font-medium text-white">{file.name}</p><p className="mt-1 text-sm text-slate-500">{formatBytes(file.size)} · Click or drop to replace</p></div> : <div><Upload className="mx-auto text-sky-300" size={30} /><p className="mt-3 font-medium text-white">Choose or drop one video</p><p className="mt-1 text-sm text-slate-500">MP4, MOV, MKV, WebM, AVI, or WMV · Maximum 500 MB</p></div>}
-        </button>
+        {file ? <div onDragOver={(event) => event.preventDefault()} onDrop={drop}><Attachment state={error ? "error" : busy ? phase === "uploading" ? "uploading" : "processing" : "idle"}><AttachmentMedia><FileVideo /></AttachmentMedia><AttachmentContent><AttachmentTitle title={file.name}>{file.name}</AttachmentTitle><AttachmentDescription>{file.type || "Video"} · {formatBytes(file.size)}</AttachmentDescription></AttachmentContent><AttachmentActions><AttachmentAction aria-label="Replace selected video" disabled={busy} onClick={() => inputRef.current?.click()}>Replace</AttachmentAction><AttachmentAction aria-label="Remove selected video" disabled={busy} onClick={() => { setFile(null); setTitle(""); if (inputRef.current) inputRef.current.value = "" }}><X /></AttachmentAction></AttachmentActions></Attachment></div> : <button type="button" className="grid min-h-36 w-full place-items-center rounded-xl border border-dashed border-white/15 bg-slate-950/50 p-5 text-center transition hover:border-sky-400/40 hover:bg-sky-400/[.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400" onClick={() => inputRef.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={drop} disabled={busy}><div><Upload className="mx-auto text-sky-300" size={30} /><p className="mt-3 font-medium text-white">Choose or drop one video</p><p className="mt-1 text-sm text-slate-500">MP4, MOV, MKV, WebM, AVI, or WMV · Maximum 500 MB</p></div></button>}
 
         <label className="block"><span className="mb-2 block text-sm font-medium text-slate-300">Clip title</span><Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} required disabled={busy} /></label>
         <div><span className="mb-2 block text-sm font-medium text-slate-300">Destination</span><button type="button" className="flex h-11 w-full items-center gap-3 rounded-lg border border-white/10 bg-slate-950/70 px-3 text-left text-sm text-slate-200 hover:border-sky-400/30" onClick={() => setPickingDestination(true)} disabled={busy}><Folder size={17} className="text-sky-300" /><span className="truncate">{destination ? `${destination.ownerUsername} / ${destination.isRoot ? "Library" : destination.name}` : "Loading…"}</span><span className="ml-auto text-xs text-slate-500">Change</span></button></div>
@@ -100,14 +102,21 @@ export function UploadDialog({ session, currentFolder, users, onClose, onQueued,
           {(compressionRequired || compress) && <div className="mt-5 grid gap-5 sm:grid-cols-2"><Slider label="Quality" value={quality} maximum={4} onChange={setQuality} valueLabel={qualityLabels[quality]} disabled={busy} /><Slider label="Maximum resolution" value={resolution} maximum={2} onChange={setResolution} valueLabel={`${resolutionValues[resolution]}p`} disabled={busy} /></div>}
         </div>
 
-        {busy && <div aria-live="polite"><div className="mb-2 flex justify-between text-sm"><span className="text-slate-300">{phase === "uploading" ? "Uploading bytes…" : "Upload complete · validating media…"}</span><span className="text-slate-500">{progress}%</span></div><div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-sky-400 transition-[width]" style={{ width: `${progress}%` }} /></div></div>}
+        {busy && <UploadProgress phase={phase} progress={progress} />}
         {error && <p className="rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200" role="alert">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2"><Button type="button" variant="danger" onClick={requestClose}><X size={16} />{busy ? "Cancel upload" : "Cancel"}</Button><Button value="trim" disabled={busy || !file || !title.trim() || !destination}><Scissors size={16} />{busy ? "Working…" : "Trim clip"}</Button><Button value="upload" variant="success" disabled={busy || !file || !title.trim() || !destination}><CloudUpload size={16} />{busy ? "Working…" : "Upload clip"}</Button></div>
       </form>
     {pickingDestination && <FolderPickerDialog title="Choose upload destination" session={session} users={users} initialID={destination?.id ?? defaultDestination} onClose={() => setPickingDestination(false)} onChoose={(folder) => { setDestination(folder); setPickingDestination(false) }} />}
-    {cancelConfirming && <Modal nested title="Cancel this upload?" onClose={() => setCancelConfirming(false)}><p className="text-sm leading-6 text-slate-400">The transfer or initial validation will stop. Its temporary source and reserved space will be removed, and nothing will enter the recycle bin.</p><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setCancelConfirming(false)}><ArrowLeft size={15} /> Keep uploading</Button><Button variant="danger" onClick={() => { setCancelConfirming(false); abortRef.current?.abort() }}><X size={15} /> Cancel upload</Button></div></Modal>}
-  </Modal>
+    {cancelConfirming && <UploadCancelAlert detail="The transfer or initial validation will stop. Its temporary source and reserved space will be removed, and nothing will enter the recycle bin." keepLabel="Keep uploading" onKeep={() => setCancelConfirming(false)} onCancel={() => { setCancelConfirming(false); abortRef.current?.abort() }} />}
+  </DialogContent></Dialog></>
+}
+
+function UploadProgress({ phase, progress }: { phase: "idle" | "uploading" | "validating"; progress: number }) { return <div className="mt-4" aria-live="polite" role="status"><div className="mb-2 flex items-center justify-between text-sm"><span className="inline-flex items-center gap-2 text-slate-300">{phase === "uploading" ? "Uploading bytes…" : <><Spinner /> Validating media…</>}</span>{phase === "uploading" && <span className="text-slate-500">{progress}%</span>}</div>{phase === "uploading" && <Progress value={progress} aria-label="Upload progress" />}</div> }
+
+function UploadCancelAlert({ detail, keepLabel, onKeep, onCancel }: { detail: string; keepLabel: string; onKeep: () => void; onCancel: () => void }) {
+  return <AlertDialog open onOpenChange={(open) => { if (!open) onKeep() }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel this upload?</AlertDialogTitle><AlertDialogDescription>{detail}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel><ArrowLeft size={15} /> {keepLabel}</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" onClick={onCancel}><X size={15} /> Cancel upload</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 }
 
 function Slider({ label, value, maximum, onChange, valueLabel, disabled }: { label: string; value: number; maximum: number; onChange: (value: number) => void; valueLabel: string; disabled: boolean }) { return <label><span className="flex justify-between text-xs font-medium text-slate-400"><span>{label}</span><span className="text-sky-300">{valueLabel}</span></span><input className="mt-3 w-full accent-sky-400" type="range" min={0} max={maximum} step={1} value={value} onChange={(event) => onChange(Number(event.target.value))} disabled={disabled} aria-valuetext={valueLabel} /></label> }
+function titleFromFile(file: File) { const lastDot = file.name.lastIndexOf("."); return lastDot > 0 ? file.name.slice(0, lastDot) : file.name }
 function formatBytes(bytes: number) { if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(bytes >= 10_000_000 ? 0 : 1)} MB`; if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`; return `${bytes} bytes` }

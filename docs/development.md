@@ -37,7 +37,7 @@ account administration, library search, folder copying, recursive
 folder-deletion summaries, upload/job cancellation controls, and media-validation
 criteria are implemented, including the one-hour total deadline and the
 pre-finalization trim and multi-track audio editor. Its completed contract is in
-`specs/completed/05-video-editing-and-audio.md`.
+`specs/completed/1-editor-gui/main.md`.
 
 ## Local development with Docker
 
@@ -235,10 +235,11 @@ copied into each screen:
 
 - `components/clip-preview.tsx` owns the thumbnail play affordance and video dialog;
 - `components/folder-picker-dialog.tsx` owns destination browsing for uploads and moves;
-- `components/item-management-bar.tsx` owns the shared Rename/Move/Delete card bar
-  and its administrator-only Copy variant;
+- `components/item-action-menus.tsx` renders one typed item-action model through
+  the visible Dropdown Menu and right-click/keyboard Context Menu;
 - `components/search-dialog.tsx` owns global search, result cards, and clip previews;
-- `components/ui/modal.tsx` provides the common portal-based modal shell.
+- Radix-backed shadcn Dialog, Alert Dialog, Drawer, menu, Item, Attachment, Empty,
+  progress, feedback, and Tooltip primitives own shared interaction behavior.
 
 Each parent screen supplies data and action callbacks. This is ordinary React
 composition: the shared component owns presentation and local interaction state,

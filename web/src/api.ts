@@ -4,7 +4,8 @@ export type Session = { user: User; csrfToken: string; publicBaseURL: string }
 export type Folder = { id: number; ownerUserId: number; ownerUsername: string; parentFolderId: number | null; name: string; isRoot: boolean; folderCount: number; clipCount: number }
 export type FolderDeletionSummary = { folderCount: number; clipCount: number; totalItems: number; storedBytes: number }
 export type ClipSummary = { id: number; title: string; state: string; sizeBytes: number | null; createdAt: string; jobId: number | null; progress: number | null; errorMessage: string | null; publicId: string }
-export type FolderPage = { folder: Folder; breadcrumbs: Folder[]; folders: Folder[]; clips: ClipSummary[]; nextCursor: string | null }
+export type FolderPage = { folder: Folder; breadcrumbs: Folder[]; folders: Folder[]; clips: ClipSummary[]; nextCursor: string | null; totalFolderCount: number; totalClipCount: number; totalItemCount: number }
+export type JobStatus = { jobId: number; clipId: number; state: string; progress: number | null; errorMessage: string | null; sizeBytes: number | null }
 export type SearchResult = { kind: "folder" | "clip"; id: number; name: string; ownerUserId: number; ownerUsername: string; folderId: number; path: string; publicId?: string; state?: string; sizeBytes?: number }
 type APIError = { error?: { message?: string; conflicts?: Array<{ kind: string; path: string }> } }
 

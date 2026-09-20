@@ -10,5 +10,10 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure"
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }]
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "firefox", grep: /@cross-browser/, use: { ...devices["Desktop Firefox"] } },
+    { name: "webkit", grep: /@cross-browser/, use: { ...devices["Desktop Safari"] } },
+    { name: "touch", grep: /@touch/, use: { ...devices["Pixel 7"] } },
+  ]
 })

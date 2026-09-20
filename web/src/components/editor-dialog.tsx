@@ -27,7 +27,14 @@ import {
 import { request, type Session, type User } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Modal } from "@/components/ui/modal";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { FolderPickerDialog } from "@/components/folder-picker-dialog";
 
 type Audio = {
@@ -91,6 +98,9 @@ export function EditorDialog({
   const [pickingDestination, setPickingDestination] = useState(false);
   const [playheadMS, setPlayheadMS] = useState(0);
   const previewRef = useRef<HTMLVideoElement>(null);
+  const editorInitialFocusDoneRef = useRef(false);
+  const metadataTriggerRef = useRef<HTMLButtonElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [titleDraft, setTitleDraft] = useState("");
   const [draft, setDraft] = useState<Editor["edit"] | null>(null);
   const [conflict, setConflict] = useState(false);
@@ -103,15 +113,20 @@ export function EditorDialog({
   const [previewStarting, setPreviewStarting] = useState(false);
   const [confirmingUnpreviewedFinalize, setConfirmingUnpreviewedFinalize] =
     useState(false);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     request<Editor>(`/api/uploads/${sessionID}`)
       .then(setEditor)
       .catch((reason) => {
         setError(reason.message);
-        onClose();
+        onCloseRef.current();
       });
-  }, [onClose, sessionID]);
+  }, [sessionID]);
   useEffect(() => {
     if (!localFile) return;
     const extension = localFile.name.split(".").pop()?.toLowerCase();
@@ -136,6 +151,16 @@ export function EditorDialog({
   }, [localFile]);
   useEffect(() => {
     editorRef.current = editor;
+  }, [editor]);
+  useEffect(() => {
+    if (!editor || editorInitialFocusDoneRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = metadataTriggerRef.current ?? previewRef.current;
+      if (!target) return;
+      target.focus();
+      editorInitialFocusDoneRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [editor]);
   useEffect(
     () => () => {
@@ -264,11 +289,16 @@ export function EditorDialog({
   ]);
   if (!editor)
     return (
-      <Modal title="Preparing editor" onClose={onClose}>
-        <p role="status" className="text-sm text-slate-400">
-          Analyzing your private source…
-        </p>
-      </Modal>
+      <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Preparing editor</DialogTitle>
+            <DialogDescription role="status">
+              Analyzing your private source…
+            </DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
     );
   const current = editor;
   const edit = activeEdit ?? current.edit;
@@ -465,7 +495,7 @@ export function EditorDialog({
             "If-Match": String(current.editRevision),
           },
           body: JSON.stringify({
-            title: titleDraft || current.title,
+            title: titleDraft.trim() || current.title,
             destinationFolderId,
           }),
         },
@@ -524,12 +554,26 @@ export function EditorDialog({
     editor.previewState === "ready" &&
     editor.previewRevision === editor.editRevision;
   return (
-    <Modal
-      title="Edit clip"
-      onClose={() => (dirty ? setDiscarding(true) : void discard())}
-      dismissible={!saving}
-      className="max-h-[94vh] max-w-6xl"
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !saving) {
+          if (dirty) setDiscarding(true);
+          else void discard();
+        }
+      }}
     >
+      <DialogContent
+        className="max-h-[94vh] max-w-6xl overflow-hidden"
+        showCloseButton={!saving}
+        onEscapeKeyDown={(event) => { if (saving) event.preventDefault(); }}
+        onPointerDownOutside={(event) => { if (saving) event.preventDefault(); }}
+        onInteractOutside={(event) => { if (saving) event.preventDefault(); }}
+      >
+      <DialogHeader>
+        <DialogTitle>Edit clip</DialogTitle>
+        <DialogDescription>Trim, mix, preview, and finalize this private upload.</DialogDescription>
+      </DialogHeader>
       <div className="grid max-h-[78vh] gap-6 overflow-y-auto pr-1 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <section>
           <p className="eyebrow">Source remains private until finalization</p>
@@ -538,6 +582,7 @@ export function EditorDialog({
               {editor.title}
             </h2>
             <Button
+              ref={metadataTriggerRef}
               size="sm"
               variant="secondary"
               disabled={saving}
@@ -807,13 +852,22 @@ export function EditorDialog({
           Finalize upload
         </Button>
       </div>
-      {confirmingUnpreviewedFinalize && (
-        <Modal
-          nested
-          title="Finalize without a current preview?"
-          onClose={() => setConfirmingUnpreviewedFinalize(false)}
-          dismissible={!saving}
+      <Dialog
+        open={confirmingUnpreviewedFinalize}
+        onOpenChange={(open) => {
+          if (!open && !saving) setConfirmingUnpreviewedFinalize(false);
+        }}
+      >
+        <DialogContent
+          showCloseButton={!saving}
+          onEscapeKeyDown={(event) => { if (saving) event.preventDefault(); }}
+          onPointerDownOutside={(event) => { if (saving) event.preventDefault(); }}
+          onInteractOutside={(event) => { if (saving) event.preventDefault(); }}
         >
+          <DialogHeader>
+            <DialogTitle>Finalize without a current preview?</DialogTitle>
+            <DialogDescription>Your latest changes have not been previewed.</DialogDescription>
+          </DialogHeader>
           <div className="flex gap-3 text-sm text-slate-300">
             <AlertTriangle className="shrink-0 text-amber-300" size={20} />
             <p>
@@ -852,47 +906,72 @@ export function EditorDialog({
               <AlertTriangle size={16} /> Finalize upload
             </Button>
           </div>
-        </Modal>
-      )}
-      {discarding && (
-        <Modal
-          nested
-          title="Discard this upload?"
-          onClose={() => setDiscarding(false)}
-        >
+        </DialogContent>
+      </Dialog>
+      <AlertDialog open={discarding} onOpenChange={(open) => { if (!open && !saving) setDiscarding(false) }}>
+        <AlertDialogContent onEscapeKeyDown={(event) => { if (saving) event.preventDefault() }}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard this upload?</AlertDialogTitle>
+            <AlertDialogDescription>This permanently removes the private editing session.</AlertDialogDescription>
+          </AlertDialogHeader>
           <div className="flex gap-3 text-sm text-slate-400">
             <AlertTriangle className="shrink-0 text-amber-300" size={20} />
             Your trim and audio changes, source file, and temporary files will
             be deleted immediately.
           </div>
-          <div className="mt-5 flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setDiscarding(false)}>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={saving}>
               <ArrowLeft size={15} />
               Keep editing
-            </Button>
-            <Button variant="danger" onClick={() => void discard()}><Trash size={15} /> Discard upload</Button>
-          </div>
-        </Modal>
-      )}
-      {metadataOpen && (
-        <Modal
-          nested
-          title="Edit clip details"
-          onClose={() => setMetadataOpen(false)}
-          dismissible={!saving}
+            </AlertDialogCancel>
+            <AlertDialogAction className="border-rose-300/60" disabled={saving} onClick={(event) => { event.preventDefault(); void discard() }}><Trash size={15} /> Discard upload</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <Dialog
+        open={metadataOpen}
+        onOpenChange={(open) => {
+          if (!open && !saving) setMetadataOpen(false);
+        }}
+      >
+        <DialogContent
+          showCloseButton={!saving}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            titleInputRef.current?.focus();
+            titleInputRef.current?.select();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            metadataTriggerRef.current?.focus();
+          }}
+          onEscapeKeyDown={(event) => { if (saving) event.preventDefault(); }}
+          onPointerDownOutside={(event) => { if (saving) event.preventDefault(); }}
+          onInteractOutside={(event) => { if (saving) event.preventDefault(); }}
         >
+          <DialogHeader>
+            <DialogTitle>Edit clip details</DialogTitle>
+            <DialogDescription>Rename this clip or choose another destination.</DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!saving && titleDraft.trim()) void saveMetadata();
+            }}
+          >
           <label className="block text-sm text-slate-300">
             Clip title
             <Input
+              ref={titleInputRef}
               className="mt-2"
               value={titleDraft}
               onChange={(event) => setTitleDraft(event.target.value)}
               maxLength={200}
-              autoFocus
             />
           </label>
           <div className="mt-4 flex justify-end gap-2">
             <Button
+              type="button"
               variant="danger"
               disabled={saving}
               onClick={() => setMetadataOpen(false)}
@@ -901,14 +980,15 @@ export function EditorDialog({
               Cancel
             </Button>
             <Button
+              type="submit"
               variant="success"
               disabled={saving || !titleDraft.trim()}
-              onClick={() => void saveMetadata()}
             >
               <Save size={15} />
               Save title
             </Button>
             <Button
+              type="button"
               variant="secondary"
               disabled={saving}
               onClick={() => setPickingDestination(true)}
@@ -917,8 +997,9 @@ export function EditorDialog({
               Change destination
             </Button>
           </div>
-        </Modal>
-      )}
+          </form>
+        </DialogContent>
+      </Dialog>
       {pickingDestination && (
         <FolderPickerDialog
           title="Choose editor destination"
@@ -932,7 +1013,8 @@ export function EditorDialog({
           }}
         />
       )}
-    </Modal>
+      </DialogContent>
+    </Dialog>
   );
 }
 function TrimTimeline({

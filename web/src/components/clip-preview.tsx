@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { Play } from "lucide-react"
-import { Modal } from "@/components/ui/modal"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 
 type ClipPreviewProps = {
@@ -29,5 +29,21 @@ export function ClipPreviewThumbnail({ title, posterSrc, className, onPreview }:
 }
 
 export function VideoPreviewDialog({ title, posterSrc, videoSrc, nested, onClose }: Omit<ClipPreviewProps, "className"> & { onClose: () => void }) {
-  return <Modal title={title} onClose={onClose} nested={nested} className="max-w-4xl"><video className="max-h-[70vh] w-full rounded-xl bg-black" controls playsInline preload="metadata" poster={posterSrc} src={videoSrc} autoFocus /></Modal>
+  const [open, setOpen] = useState(true)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const returnFocusRef = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  void nested
+  return <Dialog open={open} onOpenChange={setOpen}>
+    <DialogContent
+      className="max-h-[90dvh] max-w-4xl overflow-y-auto"
+      onOpenAutoFocus={(event) => { event.preventDefault(); videoRef.current?.focus() }}
+      onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); onClose() }}
+    >
+      <DialogHeader>
+        <DialogTitle className="truncate pr-8">{title}</DialogTitle>
+        <DialogDescription className="sr-only">Video preview with playback controls.</DialogDescription>
+      </DialogHeader>
+      <video ref={videoRef} className="max-h-[70dvh] w-full rounded-xl bg-black" controls playsInline preload="metadata" poster={posterSrc} src={videoSrc} tabIndex={0} />
+    </DialogContent>
+  </Dialog>
 }

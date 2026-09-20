@@ -1,16 +1,37 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
-import { ArrowLeft, Check, ChevronDown, ChevronRight, CircleX, CloudUpload, Copy, ExternalLink, Folder, FolderInput, FolderPlus, Home, RotateCcw, Save, Trash2, Video } from "lucide-react"
-import { request, type Folder as FolderRecord, type FolderDeletionSummary, type FolderPage, type Session, type User } from "@/api"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
+import { ArrowLeft, ChevronDown, CircleX, Copy, Folder, FolderInput, FolderPlus, RotateCcw, Save, Trash2 } from "lucide-react"
+import { request, type Folder as FolderRecord, type FolderDeletionSummary, type FolderPage, type JobStatus, type Session, type User } from "@/api"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { UploadDialog } from "@/components/upload-dialog"
 import { EditorDialog } from "@/components/editor-dialog"
-import { ClipPreview } from "@/components/clip-preview"
+import { VideoPreviewDialog } from "@/components/clip-preview"
 import { FolderPickerDialog } from "@/components/folder-picker-dialog"
-import { ItemManagementBar } from "@/components/item-management-bar"
-import { Modal } from "@/components/ui/modal"
+import { ItemDropdownActions } from "@/components/item-action-menus"
+import { ExplorerItemSummary, ExplorerToolbar } from "@/components/explorer-toolbar"
+import { createPreferenceStore } from "@/lib/explorer-preferences"
+import { folderPageURL } from "@/lib/folder-page-url"
+import { ExplorerBreadcrumbs } from "@/components/explorer-breadcrumbs"
+import { FolderGridItem } from "@/components/folder-grid-item"
+import { folderExplorerItem } from "@/lib/explorer-item"
+import { explorerGridClasses, explorerListClasses } from "@/lib/explorer-layout"
+import { ClipGridItem } from "@/components/clip-grid-item"
+import { clipExplorerItem } from "@/lib/explorer-item"
+import { itemActions } from "@/lib/item-actions"
 import { copyText } from "@/lib/clipboard"
+import { toast } from "sonner"
+import { AnimatePresence, m, useReducedMotion } from "motion/react"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Spinner } from "@/components/ui/spinner"
+import { collectionVariants, initialItemVariants, layoutTransition, type NavigationDirection } from "@/lib/motion"
+import { activeJobIDChunks, appendFolderPage, jobStatusesChangeSortKey, mergeJobStatuses } from "@/lib/explorer-coordination"
+import { openInNewTab } from "@/lib/new-tab"
+import { ViewportFileDrop } from "@/components/viewport-file-drop"
+import { waitForMinimumPending } from "@/lib/minimum-pending"
 
 type ExplorerProps = {
   session: Session
@@ -31,30 +52,125 @@ export function LibraryExplorer({ session, root, users, refreshToken = 0, onBack
   const [moveFolder, setMoveFolder] = useState<FolderRecord | null>(null)
   const [copyFolder, setCopyFolder] = useState<FolderRecord | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [appendError, setAppendError] = useState("")
+  const appendGeneration = useRef(0)
+  const appendAbort = useRef<AbortController | null>(null)
+  const loadingMoreRef = useRef(false)
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [droppedFile, setDroppedFile] = useState<File | null>(null)
   const [editorSessionID, setEditorSessionID] = useState<string | null>(null)
   const [editorLocalFile, setEditorLocalFile] = useState<File | null>(null)
   const lastRefreshToken = useRef(refreshToken)
+  const requestGeneration = useRef(0)
+  const pageAbort = useRef<AbortController | null>(null)
+  const committedLocation = useRef({ url: window.location.href, state: window.history.state })
+  const pendingFocus = useRef<{ key: string; index: number } | null>(null)
+  const preferenceStore = useMemo(() => createPreferenceStore(session.user.id), [session.user.id])
+  const [preferences, setPreferences] = useState(() => preferenceStore.get())
+  const [navigationDirection, setNavigationDirection] = useState<NavigationDirection>("neutral")
+  const [staggerInitialItems, setStaggerInitialItems] = useState(true)
+  const hasCommittedPage = useRef(false)
+  const reducedMotion = useReducedMotion()
+  const reducedMotionRef = useRef(Boolean(reducedMotion))
+  reducedMotionRef.current = Boolean(reducedMotion)
+  const sortRef = useRef(preferences.explorer.sort)
+  sortRef.current = preferences.explorer.sort
 
-  const load = useCallback((id: number, replace = false) => {
+  const openUploadPicker = useCallback(() => {
+    setDroppedFile(null)
+    setUploadOpen(true)
+  }, [])
+  const openDroppedFile = useCallback((file: File) => {
+    setDroppedFile(file)
+    setUploadOpen(true)
+  }, [])
+
+  const load = useCallback((id: number, replace = false, fromHistory = false, direction: NavigationDirection = "neutral") => {
+    const startedAt = performance.now()
+    const generation = ++requestGeneration.current
+    const sort = sortRef.current
+    appendGeneration.current++
+    appendAbort.current?.abort()
+    loadingMoreRef.current = false
+    setLoadingMore(false); setAppendError("")
+    pageAbort.current?.abort()
+    const controller = new AbortController(); pageAbort.current = controller
     setLoading(true); setError("")
-    request<FolderPage>(`/api/folders/${id}`)
-      .then((result) => { setPage(result); setFolderId(result.folder.id); const path = `/app/folders/${result.breadcrumbs.slice(1).map((crumb) => encodeURIComponent(crumb.name)).join("/") || "root"}`; (replace ? window.history.replaceState : window.history.pushState).call(window.history, { folderID: result.folder.id }, "", path) })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : "Could not load this folder."))
-      .finally(() => setLoading(false))
+    request<FolderPage>(folderPageURL(id, sort), { signal: controller.signal })
+      .then(async (result) => {
+        await waitForMinimumPending(startedAt, reducedMotionRef.current)
+        if (generation !== requestGeneration.current || controller.signal.aborted || sort !== sortRef.current || result.folder.id !== id) return
+        setNavigationDirection(direction)
+        setStaggerInitialItems(!hasCommittedPage.current)
+        hasCommittedPage.current = true
+        setPage(result); setFolderId(result.folder.id)
+        const path = `/app/folders/${result.breadcrumbs.slice(1).map((crumb) => encodeURIComponent(crumb.name)).join("/") || "root"}`
+        const state = { folderID: result.folder.id }
+        ;(replace ? window.history.replaceState : window.history.pushState).call(window.history, state, "", path)
+        committedLocation.current = { url: window.location.href, state }
+      })
+      .catch((reason) => {
+        if (generation !== requestGeneration.current || controller.signal.aborted || reason instanceof DOMException && reason.name === "AbortError") return
+        setError(reason instanceof Error ? reason.message : "Could not load this folder.")
+        if (fromHistory) window.history.replaceState(committedLocation.current.state, "", committedLocation.current.url)
+      })
+      .finally(() => { if (generation === requestGeneration.current) setLoading(false) })
   }, [])
 
   async function loadMore() {
-    if (!page?.nextCursor) return
-    setLoadingMore(true); setError("")
+    if (!page?.nextCursor || loadingMoreRef.current) return
+    const startedAt = performance.now()
+    const generation = ++appendGeneration.current
+    const committedFolder = page.folder.id; const committedSort = preferences.explorer.sort; const cursor = page.nextCursor
+    const controller = new AbortController(); appendAbort.current?.abort(); appendAbort.current = controller
+    loadingMoreRef.current = true
+    setLoadingMore(true); setAppendError("")
     try {
-      const next = await request<FolderPage>(`/api/folders/${page.folder.id}?cursor=${encodeURIComponent(page.nextCursor)}`)
-      setPage({ ...next, folders: [...page.folders, ...next.folders], clips: [...page.clips, ...next.clips] })
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not load more items.") }
-    finally { setLoadingMore(false) }
+      const next = await request<FolderPage>(folderPageURL(committedFolder, committedSort, cursor), { signal: controller.signal })
+      await waitForMinimumPending(startedAt, reducedMotionRef.current)
+      if (generation !== appendGeneration.current || controller.signal.aborted || folderId !== committedFolder || sortRef.current !== committedSort) return
+      setPage((current) => {
+        if (!current || current.folder.id !== committedFolder) return current
+        return appendFolderPage(current, next)
+      })
+    } catch (reason) { await waitForMinimumPending(startedAt, reducedMotionRef.current); if (generation === appendGeneration.current && !controller.signal.aborted) setAppendError(reason instanceof Error ? reason.message : "Could not load more items.") }
+    finally { if (generation === appendGeneration.current) { loadingMoreRef.current = false; setLoadingMore(false) } }
   }
 
-  useEffect(() => { const onPop = (event: PopStateEvent) => { const id = Number(event.state?.folderID); if (Number.isInteger(id) && id > 0) load(id, true) }; window.addEventListener("popstate", onPop); const initialID = requestedFolder?.folderID ?? root.rootFolderId; setFolderId(initialID); load(initialID, true); return () => window.removeEventListener("popstate", onPop) }, [load, requestedFolder?.folderID, requestedFolder?.token, root.rootFolderId])
+  function reloadAfterMutation(key: string) {
+    const node = document.querySelector<HTMLElement>(`[data-item-key="${key}"]`)
+    const collection = node?.parentElement
+    pendingFocus.current = { key, index: node && collection ? Array.from(collection.children).indexOf(node) : 0 }
+    load(folderId, true)
+  }
+
+  useEffect(() => {
+    const target = pendingFocus.current
+    if (!target || loading) return
+    pendingFocus.current = null
+    window.requestAnimationFrame(() => {
+      const retained = document.querySelector<HTMLElement>(`[data-item-key="${target.key}"] [aria-label^="Actions for"]`)
+      if (retained) { retained.focus(); return }
+      const items = Array.from(document.querySelectorAll<HTMLElement>("[data-item-key]"))
+      const successor = items[Math.min(target.index, Math.max(0, items.length - 1))]?.querySelector<HTMLElement>("button")
+      ;(successor ?? document.querySelector<HTMLElement>("[data-slot=empty] button") ?? document.querySelector<HTMLElement>("h1"))?.focus()
+    })
+  }, [loading, page])
+
+  useEffect(() => { const onPop = (event: PopStateEvent) => { const id = Number(event.state?.folderID); if (Number.isInteger(id) && id > 0) load(id, true, true, "back") }; window.addEventListener("popstate", onPop); const initialID = requestedFolder?.folderID ?? root.rootFolderId; setFolderId(initialID); hasCommittedPage.current = false; load(initialID, true); return () => { window.removeEventListener("popstate", onPop); pageAbort.current?.abort(); appendAbort.current?.abort() } }, [load, requestedFolder?.folderID, requestedFolder?.token, root.rootFolderId])
+
+  useEffect(() => {
+    setPreferences(preferenceStore.get())
+    const unsubscribe = preferenceStore.subscribe((next) => setPreferences(next))
+    return () => { unsubscribe(); preferenceStore.destroy() }
+  }, [preferenceStore])
+
+  const previousSort = useRef(preferences.explorer.sort)
+  useEffect(() => {
+    if (previousSort.current === preferences.explorer.sort) return
+    previousSort.current = preferences.explorer.sort
+    load(folderId, true)
+  }, [folderId, load, preferences.explorer.sort])
 
   useEffect(() => {
     if (lastRefreshToken.current === refreshToken) return
@@ -64,58 +180,95 @@ export function LibraryExplorer({ session, root, users, refreshToken = 0, onBack
 
   useEffect(() => {
     if (!page?.clips.some((clip) => ["queued", "processing", "validating"].includes(clip.state))) return
-    const timer = window.setInterval(() => {
-      request<FolderPage>(`/api/folders/${folderId}`).then(setPage).catch(() => undefined)
-    }, 2000)
-    return () => window.clearInterval(timer)
-  }, [folderId, page?.clips])
+    let stopped = false
+    const controllers: AbortController[] = []
+    const navigationGeneration = requestGeneration.current
+    const committedFolder = page.folder.id
+    const committedSort = preferences.explorer.sort
+    const poll = async () => {
+      const chunks = activeJobIDChunks(page)
+      const jobs = chunks.flat()
+      const statuses: JobStatus[] = []
+      try { for (const chunk of chunks) { const controller = new AbortController(); controllers.push(controller); const result = await request<{ jobs: JobStatus[] }>(`/api/jobs/statuses?ids=${chunk.join(",")}`, { signal: controller.signal }); statuses.push(...result.jobs) } } catch { return }
+      if (stopped || navigationGeneration !== requestGeneration.current || committedFolder !== folderId || committedSort !== sortRef.current) return
+      const found = new Set(statuses.map((status) => status.jobId))
+      if (jobs.some((id) => !found.has(id))) { load(folderId, true); return }
+      const sortChanges = jobStatusesChangeSortKey(committedSort, page, statuses)
+      if (sortChanges) { load(folderId, true); return }
+      setPage((current) => current ? mergeJobStatuses(current, statuses) : current)
+    }
+    const timer = window.setInterval(() => void poll(), 2000)
+    return () => { stopped = true; controllers.forEach((controller) => controller.abort()); window.clearInterval(timer) }
+  }, [folderId, load, page, preferences.explorer.sort])
 
   const title = page?.folder.isRoot ? (session.user.role === "admin" ? `${page.folder.ownerUsername}'s library` : "Your library") : page?.folder.name
 
   return <>
     <div className="mb-7">
-      <div className="mb-5 flex flex-wrap items-center gap-1 text-sm text-slate-400">
-        {onBack && <button className="mr-2 inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-white/[.06] hover:text-white" onClick={onBack}><ArrowLeft size={15} /> All libraries</button>}
-        {page?.breadcrumbs.map((crumb, index) => <span key={crumb.id} className="inline-flex items-center gap-1">
-          {index > 0 && <ChevronRight size={14} className="text-slate-600" />}
-          <button className="rounded-md px-2 py-1 hover:bg-white/[.06] hover:text-white" onClick={() => load(crumb.id)}>{index === 0 ? <span className="inline-flex items-center gap-1.5"><Home size={14} />{session.user.role === "admin" ? crumb.ownerUsername : "Library"}</span> : crumb.name}</button>
-        </span>)}
-      </div>
+      {page && <ExplorerBreadcrumbs crumbs={page.breadcrumbs} administrator={session.user.role === "admin"} onNavigate={(id) => load(id, false, false, "back")} onBack={onBack} />}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>{session.user.role === "admin" && root.id !== session.user.id && <div className="mb-3 inline-flex items-center gap-2 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-200" role="status"><span aria-hidden="true">●</span> Administrator view · {root.username}'s library</div>}<p className="eyebrow">{session.user.role === "admin" && root.id !== session.user.id ? `Managing ${root.username}` : "Folder explorer"}</p><h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">{title ?? "Library"}</h1><p className="mt-2 text-sm text-slate-400" aria-live="polite">{page ? `${page.folders.length} folders · ${page.clips.length} clips` : "Loading contents…"}</p></div>
-        <div className="flex gap-2"><Button variant="secondary" onClick={() => setCreateOpen(true)} disabled={!page}><FolderPlus size={17} /> New folder</Button><Button variant="success" onClick={() => setUploadOpen(true)} disabled={!page}><CloudUpload size={17} /> Upload clip</Button></div>
+        <div>{session.user.role === "admin" && root.id !== session.user.id && <div className="mb-3 inline-flex items-center gap-2 rounded-lg border border-sky-400/20 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-200" role="status"><span aria-hidden="true">●</span> Administrator view · {root.username}'s library</div>}<p className="eyebrow">{session.user.role === "admin" && root.id !== session.user.id ? `Managing ${root.username}` : "Folder explorer"}</p><h1 tabIndex={-1} className="mt-2 text-3xl font-semibold tracking-tight text-white focus:outline-none">{title ?? "Library"}</h1>{page ? <ExplorerItemSummary folderCount={page.totalFolderCount} clipCount={page.totalClipCount} /> : <p className="mt-2 text-sm text-slate-400" aria-live="polite">Loading contents…</p>}</div>
+        <ExplorerToolbar view={preferences.explorer.view} sort={preferences.explorer.sort} disabled={!page} busy={loading} onViewChange={(view) => preferenceStore.update({ explorer: { view } })} onSortChange={(sort) => preferenceStore.update({ explorer: { sort } })} onCreateFolder={() => setCreateOpen(true)} onUploadClip={openUploadPicker} onRefresh={() => load(folderId, true)} />
       </div>
     </div>
 
-    {error && <p className="mb-5 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200" role="alert">{error}</p>}
-    {loading ? <ExplorerLoading /> : page && <>
-      {page.folders.length === 0 && page.clips.length === 0 ? <EmptyFolder onCreate={() => setCreateOpen(true)} /> :
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {page.folders.map((folder) => <FolderCardV2 key={folder.id} folder={folder} session={session} onOpen={() => load(folder.id)} onRename={() => setRenameFolder(folder)} onMove={() => setMoveFolder(folder)} onCopy={session.user.role === "admin" ? () => setCopyFolder(folder) : undefined} onDeleted={() => load(folderId)} />)}
-          {page.clips.map((clip) => <div className="flex h-full flex-col" key={clip.id}><ClipCard clip={clip} session={session} /><ClipManagementV2 clip={clip} currentFolder={page.folder} session={session} users={users} onChanged={() => load(folderId)} /></div>)}
-        </div>}{page.nextCursor && <div className="mt-7 flex justify-center"><Button variant="secondary" onClick={loadMore} disabled={loadingMore}><ChevronDown size={16} />{loadingMore ? "Loading…" : "Load more"}</Button></div>}
-    </>}
+    {error && <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-sm text-red-200" role="alert"><span>{error}</span><Button size="sm" variant="secondary" onClick={() => load(folderId, true)}><RotateCcw size={15} /> Retry</Button></div>}
+    {loading && page && <p className="fixed bottom-5 left-1/2 z-40 inline-flex -translate-x-1/2 items-center gap-2 rounded-full border border-sky-300/20 bg-slate-950/90 px-4 py-2 text-sm text-sky-200 shadow-xl shadow-black/30 backdrop-blur-md" role="status"><span className="size-4 animate-spin rounded-full border-2 border-sky-300 border-r-transparent" /> Updating folder…</p>}
+    {loading && !page ? <ExplorerLoading view={preferences.explorer.view} /> : page && <div aria-busy={loading} inert={loading ? true : undefined} className={loading ? "pointer-events-none opacity-70 transition-opacity" : "transition-opacity"}>
+      {page.totalItemCount === 0 ? <EmptyFolder onCreate={() => setCreateOpen(true)} onUpload={openUploadPicker} /> :
+        <><div className={preferences.explorer.view === "list" ? "explorer-list-head" : "sr-only"} aria-hidden={preferences.explorer.view !== "list"}><span>Name</span><span>Status / type</span><span>Size / contents</span><span>Uploaded</span><span>Actions</span></div><AnimatePresence mode="popLayout"><m.ul key={page.folder.id} layout={!reducedMotion} transition={layoutTransition} initial="hidden" animate="visible" exit="exit" variants={collectionVariants(navigationDirection, Boolean(reducedMotion))} className={preferences.explorer.view === "grid" ? explorerGridClasses : explorerListClasses} data-view={preferences.explorer.view} aria-label="Folder contents">
+          {page.folders.map((folder, index) => <m.li layout={!reducedMotion} transition={layoutTransition} initial="hidden" animate="visible" variants={initialItemVariants(index, staggerInitialItems, Boolean(reducedMotion))} key={`folder:${folder.id}`} data-item-key={`folder:${folder.id}`}><FolderCardV2 folder={folder} session={session} onOpen={() => load(folder.id, false, false, "forward")} onRename={() => setRenameFolder(folder)} onMove={() => setMoveFolder(folder)} onCopy={session.user.role === "admin" ? () => setCopyFolder(folder) : undefined} onDeleted={() => reloadAfterMutation(`folder:${folder.id}`)} /></m.li>)}
+          {page.clips.map((clip, index) => <m.li layout={!reducedMotion} transition={layoutTransition} initial="hidden" animate="visible" variants={initialItemVariants(page.folders.length + index, staggerInitialItems, Boolean(reducedMotion))} key={`clip:${clip.id}`} data-item-key={`clip:${clip.id}`}><ClipCardV2 clip={clip} currentFolder={page.folder} session={session} users={users} onChanged={() => reloadAfterMutation(`clip:${clip.id}`)} /></m.li>)}
+        </m.ul></AnimatePresence></>}{(page.nextCursor || appendError) && <div className="mt-7 flex flex-col items-center gap-2">{appendError && <p className="text-sm text-red-300" role="alert">{appendError}</p>}<Button variant="secondary" onClick={loadMore} disabled={loadingMore}>{loadingMore ? <Spinner /> : <ChevronDown size={16} />}{loadingMore ? "Loading…" : appendError ? "Retry load more" : "Load more"}</Button></div>}
+    </div>}
 
-    {createOpen && page && <NameDialog title="Create folder" action="Create folder" onClose={() => setCreateOpen(false)} onSubmit={async (name) => { await request("/api/folders", { method: "POST", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ parentFolderId: page.folder.id, name }) }); setCreateOpen(false); load(folderId) }} />}
-    {renameFolder && <NameDialog title="Rename folder" action="Save name" initialValue={renameFolder.name} onClose={() => setRenameFolder(null)} onSubmit={async (name) => { await request(`/api/folders/${renameFolder.id}`, { method: "PATCH", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ name }) }); setRenameFolder(null); load(folderId) }} />}
-    {moveFolder && <MoveDialog source={moveFolder} session={session} users={users} onClose={() => setMoveFolder(null)} onMoved={() => { setMoveFolder(null); load(folderId) }} />}
-    {copyFolder && page && <CopyFolderDialog source={copyFolder} initialFolderID={page.folder.id} session={session} users={users} onClose={() => setCopyFolder(null)} onCopied={() => { setCopyFolder(null); load(folderId) }} />}
-    {uploadOpen && page && <UploadDialog session={session} currentFolder={page.folder} users={users} onClose={() => setUploadOpen(false)} onQueued={() => {setUploadOpen(false);load(folderId)}} onUploaded={(sessionID,file) => { setUploadOpen(false);setEditorLocalFile(file);setEditorSessionID(sessionID) }} />}
-    {editorSessionID && <EditorDialog session={session} sessionID={editorSessionID} localFile={editorLocalFile} users={users} onClose={() => {setEditorSessionID(null);setEditorLocalFile(null)}} onFinalized={() => { setEditorSessionID(null);setEditorLocalFile(null); load(folderId) }} />}
+    {createOpen && page && <NameDialog title="Create folder" action="Create folder" onClose={() => setCreateOpen(false)} onSubmit={async (name) => { await request("/api/folders", { method: "POST", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ parentFolderId: page.folder.id, name }) }); toast.success("Folder created"); load(folderId, true) }} />}
+    {renameFolder && <NameDialog title="Rename folder" action="Save name" initialValue={renameFolder.name} onClose={() => setRenameFolder(null)} onSubmit={async (name) => { await request(`/api/folders/${renameFolder.id}`, { method: "PATCH", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ name }) }); toast.success("Folder renamed"); reloadAfterMutation(`folder:${renameFolder.id}`) }} />}
+    {moveFolder && <MoveDialog source={moveFolder} session={session} users={users} onClose={() => setMoveFolder(null)} onMoved={() => { const key = `folder:${moveFolder.id}`; setMoveFolder(null); toast.success("Folder moved"); reloadAfterMutation(key) }} />}
+    {copyFolder && page && <CopyFolderDialog source={copyFolder} initialFolderID={page.folder.id} session={session} users={users} onClose={() => setCopyFolder(null)} onCopied={() => { const key = `folder:${copyFolder.id}`; setCopyFolder(null); toast.success("Folder copied"); reloadAfterMutation(key) }} />}
+    {page && <ViewportFileDrop enabled={!uploadOpen && !editorSessionID} destinationLabel={page.folder.isRoot ? `${page.folder.ownerUsername}'s library` : page.folder.name} onFile={openDroppedFile} />}
+    {uploadOpen && page && <UploadDialog session={session} currentFolder={page.folder} users={users} initialFile={droppedFile} onClose={() => {setUploadOpen(false);setDroppedFile(null)}} onQueued={() => {setUploadOpen(false);setDroppedFile(null);toast.success("Upload queued");load(folderId, true)}} onUploaded={(sessionID,file) => { setUploadOpen(false);setDroppedFile(null);setEditorLocalFile(file);setEditorSessionID(sessionID) }} />}
+    {editorSessionID && <EditorDialog session={session} sessionID={editorSessionID} localFile={editorLocalFile} users={users} onClose={() => {setEditorSessionID(null);setEditorLocalFile(null)}} onFinalized={() => { setEditorSessionID(null);setEditorLocalFile(null); load(folderId, true) }} />}
   </>
 }
 
-function ClipCard({ clip, session }: { clip: import("@/api").ClipSummary; session: Session }) {
-  const [copied, setCopied] = useState(false)
-  const shareURL = `${session.publicBaseURL}/c/${clip.publicId}`
-  async function copyLink() { await copyText(shareURL); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }
-  return <Card className="overflow-hidden">
-    {clip.state === "ready" ? <ClipPreview title={clip.title} posterSrc={`/m/${clip.publicId}/poster`} videoSrc={`/m/${clip.publicId}/video`} /> : <div className="grid aspect-video place-items-center bg-slate-950 text-slate-700"><Video size={32} /></div>}
-    <div className="p-4"><h2 className="truncate font-medium text-white">{clip.title}</h2><div className="mt-2 flex items-center justify-between text-xs" aria-live="polite"><span className={clip.state === "ready" ? "text-emerald-300" : clip.state === "failed" ? "text-red-300" : "capitalize text-sky-300"}>{clip.state === "queued" ? "Queued for processing" : clip.state === "processing" ? "Processing video" : clip.state}</span>{clip.progress !== null && !["ready", "failed"].includes(clip.state) && <span className="text-slate-500">{clip.progress}%</span>}</div>{clip.progress !== null && !["ready", "failed"].includes(clip.state) && <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800" role="progressbar" aria-label={`${clip.state} progress`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={clip.progress}><div className="h-full rounded-full bg-sky-400 transition-[width]" style={{ width: `${clip.progress}%` }} /></div>}{clip.errorMessage && <p className="mt-2 text-xs leading-5 text-red-300" role="alert">{clip.errorMessage}</p>}{clip.sizeBytes !== null && <p className="mt-2 text-xs text-slate-600">{formatBytes(clip.sizeBytes)}</p>}{clip.state === "ready" && <div className="mt-3 flex gap-2"><Button size="sm" variant="secondary" onClick={copyLink}>{copied ? <Check size={14} /> : <Copy size={14} />}{copied ? "Copied" : "Copy link"}</Button><Button size="sm" variant="ghost" asChild><a href={`/c/${clip.publicId}`} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Public page</a></Button></div>}</div>
-  </Card>
+function ClipCardV2({ clip, currentFolder, session, users, onChanged }: { clip: import("@/api").ClipSummary; currentFolder: FolderRecord; session: Session; users: User[]; onChanged: () => void }) {
+  const [previewing, setPreviewing] = useState(false)
+  const [dialog, setDialog] = useState<"rename" | "move" | "delete" | "cancel-job" | "dismiss-failure" | null>(null)
+  const [jobBusy, setJobBusy] = useState(false)
+  const [jobError, setJobError] = useState("")
+  const item = clipExplorerItem(clip)
+  const actions = itemActions(item, {
+    preview: () => setPreviewing(true),
+    "copy-link": async () => { try { await copyText(`${session.publicBaseURL}/c/${clip.publicId}`); toast.success("Link copied") } catch { toast.error("Could not copy link") } },
+    "public-page": () => { openInNewTab(`${session.publicBaseURL}/c/${clip.publicId}`) },
+    rename: () => setDialog("rename"), move: () => setDialog("move"), trash: () => setDialog("delete"),
+    cancel: () => { setJobError(""); setDialog("cancel-job") }, dismiss: () => { setJobError(""); setDialog("dismiss-failure") },
+  })
+  async function submit(title?: string) {
+    if (dialog === "rename") await request(`/api/clips/${clip.id}`, { method: "PATCH", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ title }) })
+    if (dialog === "delete") await request(`/api/clips/${clip.id}`, { method: "DELETE", headers: { "X-CSRF-Token": session.csrfToken } })
+    toast.success(dialog === "rename" ? "Clip renamed" : "Clip moved to recycle bin")
+    setDialog(null); onChanged()
+  }
+  async function submitJobAction() {
+    if (!clip.jobId) return
+    setJobBusy(true); setJobError("")
+    try { await request(dialog === "dismiss-failure" ? `/api/jobs/${clip.jobId}/failure` : `/api/jobs/${clip.jobId}`, { method: "DELETE", headers: { "X-CSRF-Token": session.csrfToken } }); toast.success(dialog === "dismiss-failure" ? "Failed upload dismissed" : "Upload cancelled"); setDialog(null); onChanged() }
+    catch (reason) { setJobError(reason instanceof Error ? reason.message : "Could not update this upload.") }
+    finally { setJobBusy(false) }
+  }
+  return <div className="flex h-full flex-col">
+    <ClipGridItem item={item} onPreview={item.previewEligible ? () => setPreviewing(true) : undefined} actions={actions} />
+    {previewing && <VideoPreviewDialog title={clip.title} posterSrc={`/m/${clip.publicId}/poster`} videoSrc={`/m/${clip.publicId}/video`} onClose={() => setPreviewing(false)} />}
+    {dialog === "rename" && <NameDialog title="Rename clip" fieldLabel="Clip title" action="Save name" initialValue={clip.title} onClose={() => setDialog(null)} onSubmit={submit} />}
+    {dialog === "move" && <MoveDialog source={{ id: clip.id, name: clip.title, ownerUserId: currentFolder.ownerUserId }} sourceKind="clip" initialFolderID={currentFolder.id} session={session} users={users} onClose={() => setDialog(null)} onMoved={() => { toast.success("Clip moved"); setDialog(null); onChanged() }} />}
+    {dialog === "delete" && <AlertDialog open onOpenChange={(open) => { if (!open) setDialog(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Move clip to recycle bin</AlertDialogTitle><AlertDialogDescription>This clip will be recoverable from the recycle bin.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel><ArrowLeft size={15} /> Back</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" onClick={(event) => { event.preventDefault(); void submit() }}><Trash2 size={15} /> Move to recycle bin</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+    {(dialog === "cancel-job" || dialog === "dismiss-failure") && <AlertDialog open onOpenChange={(open) => { if (!open && !jobBusy) setDialog(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{dialog === "cancel-job" ? "Cancel this upload?" : "Dismiss failed upload?"}</AlertDialogTitle><AlertDialogDescription>{dialog === "cancel-job" ? "Processing will stop and all source and partial media will be removed. This cannot be recovered." : "Dismissing removes this private failure notice permanently."}</AlertDialogDescription></AlertDialogHeader>{jobError && <p className="text-sm text-red-300" role="alert">{jobError}</p>}<AlertDialogFooter><AlertDialogCancel disabled={jobBusy}>Back</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" disabled={jobBusy} onClick={(event) => { event.preventDefault(); void submitJobAction() }}>{jobBusy ? "Working…" : dialog === "cancel-job" ? "Cancel upload" : "Dismiss"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+  </div>
 }
 
-function ClipManagementV2({ clip, currentFolder, session, users, onChanged }: { clip: import("@/api").ClipSummary; currentFolder: FolderRecord; session: Session; users: User[]; onChanged: () => void }) {
+export function ClipManagementV2({ clip, currentFolder, session, users, onChanged }: { clip: import("@/api").ClipSummary; currentFolder: FolderRecord; session: Session; users: User[]; onChanged: () => void }) {
   const [dialog, setDialog] = useState<"rename" | "move" | "delete" | "cancel-job" | "dismiss-failure" | null>(null)
   const [jobBusy, setJobBusy] = useState(false)
   const [jobError, setJobError] = useState("")
@@ -124,7 +277,8 @@ function ClipManagementV2({ clip, currentFolder, session, users, onChanged }: { 
   async function submit(title?: string) {
     if (dialog === "rename") await request(`/api/clips/${clip.id}`, { method: "PATCH", headers: { "X-CSRF-Token": session.csrfToken }, body: JSON.stringify({ title }) })
     if (dialog === "delete") await request(`/api/clips/${clip.id}`, { method: "DELETE", headers: { "X-CSRF-Token": session.csrfToken } })
-    setDialog(null); onChanged()
+    if (dialog !== "rename") setDialog(null)
+    onChanged()
   }
 
   async function submitJobAction() {
@@ -140,20 +294,20 @@ function ClipManagementV2({ clip, currentFolder, session, users, onChanged }: { 
 
   if (clip.state === "failed" && jobID) return <>
     <JobActionBar label="Dismiss failed upload" onClick={() => { setJobError(""); setDialog("dismiss-failure") }} />
-    {dialog === "dismiss-failure" && <Modal title="Dismiss failed upload?" onClose={() => setDialog(null)} dismissible={!jobBusy}><p className="text-sm leading-6 text-slate-400">The source and partial media are already gone. Dismissing removes this private failure notice permanently; it will not create a recycle-bin item.</p>{jobError && <p className="mt-3 text-sm text-red-300" role="alert">{jobError}</p>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" disabled={jobBusy} onClick={() => setDialog(null)}><ArrowLeft size={15} /> Keep notice</Button><Button variant="danger" disabled={jobBusy} onClick={submitJobAction}><CircleX size={15} />{jobBusy ? "Dismissing…" : "Dismiss"}</Button></div></Modal>}
+    {dialog === "dismiss-failure" && <AlertDialog open onOpenChange={(open) => { if (!open && !jobBusy) setDialog(null) }}><AlertDialogContent onEscapeKeyDown={(event) => { if (jobBusy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>Dismiss failed upload?</AlertDialogTitle><AlertDialogDescription>The source and partial media are already gone. Dismissing removes this private failure notice permanently; it will not create a recycle-bin item.</AlertDialogDescription></AlertDialogHeader>{jobError && <p className="text-sm text-red-300" role="alert">{jobError}</p>}<AlertDialogFooter><AlertDialogCancel disabled={jobBusy}><ArrowLeft size={15} /> Keep notice</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" disabled={jobBusy} onClick={(event) => { event.preventDefault(); void submitJobAction() }}><CircleX size={15} />{jobBusy ? "Dismissing…" : "Dismiss"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
   </>
 
   if (["queued", "validating", "processing"].includes(clip.state) && jobID) return <>
     <JobActionBar label="Cancel processing" onClick={() => { setJobError(""); setDialog("cancel-job") }} />
-    {dialog === "cancel-job" && <Modal title="Cancel this upload?" onClose={() => setDialog(null)} dismissible={!jobBusy}><p className="text-sm leading-6 text-slate-400">Processing will stop and all source and partial media will be removed. The clip will not enter the recycle bin and cannot be recovered.</p>{jobError && <p className="mt-3 text-sm text-red-300" role="alert">{jobError}</p>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" disabled={jobBusy} onClick={() => setDialog(null)}><ArrowLeft size={15} /> Keep processing</Button><Button variant="danger" disabled={jobBusy} onClick={submitJobAction}><CircleX size={15} />{jobBusy ? "Cancelling…" : "Cancel upload"}</Button></div></Modal>}
+    {dialog === "cancel-job" && <AlertDialog open onOpenChange={(open) => { if (!open && !jobBusy) setDialog(null) }}><AlertDialogContent onEscapeKeyDown={(event) => { if (jobBusy) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>Cancel this upload?</AlertDialogTitle><AlertDialogDescription>Processing will stop and all source and partial media will be removed. The clip will not enter the recycle bin and cannot be recovered.</AlertDialogDescription></AlertDialogHeader>{jobError && <p className="text-sm text-red-300" role="alert">{jobError}</p>}<AlertDialogFooter><AlertDialogCancel disabled={jobBusy}><ArrowLeft size={15} /> Keep processing</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" disabled={jobBusy} onClick={(event) => { event.preventDefault(); void submitJobAction() }}><CircleX size={15} />{jobBusy ? "Cancelling…" : "Cancel upload"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
   </>
 
   if (clip.state !== "ready") return null
   return <>
-    <ItemManagementBar onRename={() => setDialog("rename")} onMove={() => setDialog("move")} onDelete={() => setDialog("delete")} />
+    <ItemDropdownActions actions={itemActions(clipExplorerItem(clip), { rename: () => setDialog("rename"), move: () => setDialog("move"), trash: () => setDialog("delete") })} label={`Actions for ${clip.title}`} />
     {dialog === "rename" && <NameDialog title="Rename clip" fieldLabel="Clip title" action="Save name" initialValue={clip.title} onClose={() => setDialog(null)} onSubmit={submit} />}
     {dialog === "move" && <MoveDialog source={{ id: clip.id, name: clip.title, ownerUserId: currentFolder.ownerUserId }} sourceKind="clip" initialFolderID={currentFolder.id} session={session} users={users} onClose={() => setDialog(null)} onMoved={() => { setDialog(null); onChanged() }} />}
-    {dialog === "delete" && <Modal title="Move clip to recycle bin" onClose={() => setDialog(null)}><p className="text-sm text-slate-400">This clip will be recoverable from the recycle bin.</p><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setDialog(null)}><ArrowLeft size={15} /> Back</Button><Button variant="danger" onClick={() => submit()}><Trash2 size={15} /> Move to recycle bin</Button></div></Modal>}
+    {dialog === "delete" && <AlertDialog open onOpenChange={(open) => { if (!open) setDialog(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Move clip to recycle bin</AlertDialogTitle><AlertDialogDescription>This clip will be recoverable from the recycle bin.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel><ArrowLeft size={15} /> Back</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" onClick={(event) => { event.preventDefault(); void submit() }}><Trash2 size={15} /> Move to recycle bin</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
   </>
 }
 
@@ -163,20 +317,15 @@ function JobActionBar({ label, onClick }: { label: string; onClick: () => void }
 
 function FolderCardV2({ folder, session, onOpen, onRename, onMove, onCopy, onDeleted }: { folder: FolderRecord; session: Session; onOpen: () => void; onRename: () => void; onMove: () => void; onCopy?: () => void; onDeleted: () => void }) {
   const [confirming, setConfirming] = useState(false)
+  const item = folderExplorerItem(folder, session.user.role)
+  const actions = itemActions(item, { open: onOpen, rename: onRename, move: onMove, copy: onCopy, trash: () => setConfirming(true) })
   return <div className="flex h-full flex-col">
-    <Card className="group flex flex-1 flex-col overflow-hidden p-4 transition hover:border-sky-400/30 hover:bg-slate-900">
-      <button className="block w-full flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400" onClick={onOpen}>
-        <div className="mb-7 grid size-12 place-items-center rounded-xl border border-sky-400/15 bg-sky-400/10 text-sky-300"><Folder /></div>
-        <h2 className="truncate font-semibold text-white">{folder.name}</h2>
-        <p className="mt-1 text-xs text-slate-500">{folder.folderCount} folders · {folder.clipCount} clips</p>
-      </button>
-    </Card>
-    <ItemManagementBar onRename={onRename} onMove={onMove} onCopy={onCopy} onDelete={() => setConfirming(true)} />
-    {confirming && <FolderDeleteDialog folder={folder} session={session} onClose={() => setConfirming(false)} onDeleted={onDeleted} />}
+    <FolderGridItem item={item} onOpen={onOpen} actions={actions} />
+    {confirming && <FolderDeleteDialog folder={folder} session={session} onClose={() => setConfirming(false)} onDeleted={() => { toast.success("Folder moved to recycle bin"); onDeleted() }} />}
   </div>
 }
 
-function FolderDeleteDialog({ folder, session, onClose, onDeleted }: { folder: FolderRecord; session: Session; onClose: () => void; onDeleted: () => void }) {
+export function FolderDeleteDialog({ folder, session, onClose, onDeleted }: { folder: FolderRecord; session: Session; onClose: () => void; onDeleted: () => void }) {
   const [summary, setSummary] = useState<FolderDeletionSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
@@ -207,11 +356,11 @@ function FolderDeleteDialog({ folder, session, onClose, onDeleted }: { folder: F
     finally { setBusy(false) }
   }
 
-  return <Modal title={`Delete “${folder.name}”?`} onClose={onClose} dismissible={!busy}>
+  return <AlertDialog open onOpenChange={(open) => { if (!open && !busy) onClose() }}><AlertDialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }}>
+    <AlertDialogHeader><AlertDialogTitle>{`Delete “${folder.name}”?`}</AlertDialogTitle><AlertDialogDescription>The complete folder subtree will move to the recycle bin. Review the recursive totals before continuing.</AlertDialogDescription></AlertDialogHeader>
     {loading && <div className="rounded-xl border border-white/[.08] bg-slate-950 p-4 text-sm text-slate-400" role="status">Calculating everything inside this folder…</div>}
     {!loading && loadError && <div className="rounded-xl border border-red-400/20 bg-red-400/10 p-4"><p className="text-sm text-red-200" role="alert">{loadError}</p><Button className="mt-3" size="sm" variant="secondary" onClick={() => setReloadToken((value) => value + 1)}><RotateCcw size={15} /> Retry summary</Button></div>}
     {summary && <>
-      <p className="text-sm leading-6 text-slate-400">The complete folder subtree will move to the recycle bin. Review the recursive totals before continuing.</p>
       <div className="mt-4 grid grid-cols-3 gap-2">
         <DeletionStat label="Folders" value={summary.folderCount.toLocaleString()} />
         <DeletionStat label="Clips" value={summary.clipCount.toLocaleString()} />
@@ -220,21 +369,55 @@ function FolderDeleteDialog({ folder, session, onClose, onDeleted }: { folder: F
     </>}
     <label className="mt-4 flex items-start gap-3 rounded-lg border border-white/[.08] bg-slate-950 p-3 text-sm text-slate-300"><input className="mt-1 size-4 accent-sky-400" type="checkbox" checked={acknowledged} disabled={!summary || loading} onChange={(event) => setAcknowledged(event.target.checked)} /> I understand all {summary?.totalItems.toLocaleString() ?? "calculated"} items will be removed from the active library.</label>
     {actionError && <p className="mt-3 text-sm text-red-300" role="alert">{actionError}</p>}
-    <div className="mt-5 flex justify-end gap-2"><Button variant="secondary" disabled={busy} onClick={onClose}><ArrowLeft size={15} /> Back</Button><Button variant="danger" disabled={!summary || loading || !acknowledged || busy} onClick={remove}><Trash2 size={15} />{busy ? "Moving…" : "Move to recycle bin"}</Button></div>
-  </Modal>
+    <AlertDialogFooter><AlertDialogCancel disabled={busy}><ArrowLeft size={15} /> Back</AlertDialogCancel><AlertDialogAction className="border-rose-300/60" disabled={!summary || loading || !acknowledged || busy} onClick={(event) => { event.preventDefault(); void remove() }}><Trash2 size={15} />{busy ? "Moving…" : "Move to recycle bin"}</AlertDialogAction></AlertDialogFooter>
+  </AlertDialogContent></AlertDialog>
 }
 
 function DeletionStat({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-xl border border-white/[.08] bg-white/[.03] px-3 py-3"><p className="truncate text-xs text-slate-500">{label}</p><p className="mt-1 truncate text-sm font-semibold text-white" title={value}>{value}</p></div>
 }
 
-function ExplorerLoading() { return <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" role="status" aria-label="Loading folder contents">{[1, 2, 3, 4].map((item) => <div key={item} className="h-44 animate-pulse rounded-2xl border border-white/[.06] bg-white/[.03]" />)}</div> }
-function EmptyFolder({ onCreate }: { onCreate: () => void }) { return <div className="grid min-h-72 place-items-center rounded-2xl border border-dashed border-white/10 bg-white/[.02] px-5 text-center"><div><div className="mx-auto grid size-14 place-items-center rounded-2xl bg-sky-400/10 text-sky-300"><Folder size={27} /></div><h2 className="mt-4 font-semibold text-white">This folder is empty</h2><p className="mt-2 text-sm text-slate-500">Create a folder or use Upload clip to add your first video.</p><Button className="mt-5" variant="secondary" onClick={onCreate}><FolderPlus size={17} /> Create folder</Button></div></div> }
+function ExplorerLoading({ view }: { view: "grid" | "list" }) {
+  return <div className={view === "grid" ? explorerGridClasses : explorerListClasses} data-view={view} role="status" aria-label={`Loading folder contents in ${view} view`}>
+    {[1, 2, 3, 4].map((item) => <Skeleton key={item} className={view === "grid" ? "aspect-[4/3] rounded-2xl border border-white/[.06]" : "h-[4.75rem] rounded-2xl border border-white/[.06]"} />)}
+  </div>
+}
+function EmptyFolder({ onCreate, onUpload }: { onCreate: () => void; onUpload: () => void }) { return <Empty className="min-h-72 border border-white/10 bg-white/[.02]"><EmptyHeader><EmptyMedia variant="icon"><Folder /></EmptyMedia><EmptyTitle>This folder is empty</EmptyTitle><EmptyDescription>Create a folder or upload a clip to add your first video.</EmptyDescription></EmptyHeader><EmptyContent><div className="flex flex-wrap justify-center gap-2"><Button variant="secondary" onClick={onCreate}><FolderPlus size={17} /> Create folder</Button><Button variant="success" onClick={onUpload}>Upload clip</Button></div></EmptyContent></Empty> }
 
-function NameDialog({ title, fieldLabel = "Folder name", action, initialValue = "", onClose, onSubmit }: { title: string; fieldLabel?: string; action: string; initialValue?: string; onClose: () => void; onSubmit: (name: string) => Promise<void> }) {
-  const [name, setName] = useState(initialValue); const [busy, setBusy] = useState(false); const [error, setError] = useState("")
-  async function submit(event: FormEvent) { event.preventDefault(); setBusy(true); setError(""); try { await onSubmit(name) } catch (reason) { setError(reason instanceof Error ? reason.message : "Something went wrong.") } finally { setBusy(false) } }
-  return <Modal title={title} onClose={onClose} dismissible={!busy}><form className="space-y-4" onSubmit={submit}><label className="block"><span className="mb-2 block text-sm font-medium text-slate-300">{fieldLabel}</span><Input value={name} onChange={(event) => setName(event.target.value)} maxLength={fieldLabel === "Clip title" ? 200 : 100} required autoFocus /></label>{error && <p className="text-sm text-red-300" role="alert">{error}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={busy} onClick={onClose}><ArrowLeft size={15} /> Back</Button><Button variant="success" disabled={busy || !name.trim()}><Save size={15} />{busy ? "Saving…" : action}</Button></div></form></Modal>
+export function NameDialog({ title, fieldLabel = "Folder name", action, initialValue = "", onClose, onSubmit }: { title: string; fieldLabel?: string; action: string; initialValue?: string; onClose: () => void; onSubmit: (name: string) => Promise<void> }) {
+  const [open, setOpen] = useState(true)
+  const [name, setName] = useState(initialValue)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const submittingRef = useRef(false)
+  const returnFocusRef = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  const inputID = fieldLabel === "Clip title" ? "rename-clip-title" : "folder-name"
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (submittingRef.current || !name.trim()) return
+    submittingRef.current = true
+    setBusy(true)
+    setError("")
+    try {
+      await onSubmit(name.trim())
+      setOpen(false)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Something went wrong.")
+    } finally {
+      submittingRef.current = false
+      setBusy(false)
+    }
+  }
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !busy) setOpen(false) }}>
+    <DialogContent showCloseButton={!busy} onCloseAutoFocus={(event) => { event.preventDefault(); returnFocusRef.current?.focus(); onClose() }} onEscapeKeyDown={(event) => { if (busy) event.preventDefault() }} onPointerDownOutside={(event) => { if (busy) event.preventDefault() }} onInteractOutside={(event) => { if (busy) event.preventDefault() }}>
+      <DialogHeader><DialogTitle>{title}</DialogTitle><DialogDescription>{fieldLabel === "Clip title" ? "Choose the title shown in your library and public link." : "Choose a name for this folder."}</DialogDescription></DialogHeader>
+      <form className="space-y-4" onSubmit={submit}>
+        <FieldGroup className="gap-4"><Field><FieldLabel htmlFor={inputID}>{fieldLabel}</FieldLabel><Input id={inputID} value={name} onChange={(event) => setName(event.target.value)} maxLength={fieldLabel === "Clip title" ? 200 : 100} required autoFocus /></Field></FieldGroup>
+        <FieldError>{error}</FieldError>
+        <DialogFooter className="gap-2 sm:space-x-0"><Button type="button" variant="secondary" disabled={busy} onClick={() => setOpen(false)}><ArrowLeft size={15} /> Back</Button><Button type="submit" variant="success" disabled={busy || !name.trim()}><Save size={15} />{busy ? "Saving…" : action}</Button></DialogFooter>
+      </form>
+    </DialogContent>
+  </Dialog>
 }
 
 function MoveDialog({ source, sourceKind = "folder", initialFolderID, session, users, onClose, onMoved }: { source: Pick<FolderRecord, "id" | "name" | "ownerUserId">; sourceKind?: "folder" | "clip"; initialFolderID?: number; session: Session; users: User[]; onClose: () => void; onMoved: () => void }) {

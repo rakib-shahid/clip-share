@@ -40,14 +40,14 @@ func TestFolderCopyCreatesIndependentSubtree(t *testing.T) {
 	if !published || copied.ID == source.ID || copied.OwnerUserID != admin.ID || copied.Name != source.Name {
 		t.Fatalf("copied root=%+v published=%v", copied, published)
 	}
-	page, err := db.FolderPage(ctx, copied.ID, 0)
+	page, err := db.FolderPage(ctx, copied.ID, FolderPageOptions{Sort: SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Folders) != 1 || len(page.Clips) != 1 || page.Folders[0].ID == child.ID || page.Clips[0].PublicID == "source-public-one" {
 		t.Fatalf("copied page=%+v", page)
 	}
-	childPage, err := db.FolderPage(ctx, page.Folders[0].ID, 0)
+	childPage, err := db.FolderPage(ctx, page.Folders[0].ID, FolderPageOptions{Sort: SortLatest})
 	if err != nil || len(childPage.Clips) != 1 || childPage.Clips[0].PublicID == "source-public-two" {
 		t.Fatalf("copied child=%+v err=%v", childPage, err)
 	}
@@ -114,7 +114,7 @@ func TestFolderCopyRejectsInvalidOrChangingSourcesAndRollsBack(t *testing.T) {
 	if _, err := db.CommitFolderCopy(ctx, rollbackPlan, nil, func([]MediaLayoutEntry) error { return publishErr }); !errors.Is(err, publishErr) {
 		t.Fatalf("publish error=%v", err)
 	}
-	adminPage, err := db.FolderPage(ctx, admin.RootFolderID, 0)
+	adminPage, err := db.FolderPage(ctx, admin.RootFolderID, FolderPageOptions{Sort: SortLatest})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "cliVersion": "4.21.0",
+  "provider": "radix",
+  "style": "new-york",
+  "reviewedAt": "2026-09-13",
+  "components": [
+    "button",
+    "card",
+    "input",
+    "dialog",
+    "field",
+    "label",
+    "separator",
+    "alert-dialog",
+    "drawer",
+    "dropdown-menu",
+    "badge",
+    "empty",
+    "skeleton",
+    "spinner",
+    "progress",
+    "tooltip",
+    "sonner",
+    "button-group",
+    "toggle",
+    "toggle-group",
+    "breadcrumb",
+    "item",
+    "context-menu",
+    "attachment"
+  ]
+}
